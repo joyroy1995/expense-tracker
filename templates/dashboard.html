@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dashboard - Expense Tracker</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+    <nav class="navbar">
+        <div class="nav-brand">
+            <span class="logo-icon">৳</span>
+            <span>Expense Tracker</span>
+        </div>
+        <div class="nav-links">
+            <a href="/" class="nav-link">Home</a>
+            <a href="/dashboard" class="nav-link active">Dashboard</a>
+            <a href="/logout" class="nav-link nav-logout">Logout</a>
+        </div>
+    </nav>
+
+    <main class="container">
+        <div class="dashboard-header">
+            <h1>Dashboard</h1>
+            <div class="month-selector">
+                <select id="monthSelect" onchange="changeMonth()">
+                    {% for m in range(1, 13) %}
+                    <option value="{{ year }}-{{ '%02d'|format(m) }}" {% if m == month %}selected{% endif %}>
+                        {{ ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"][m-1] }} {{ year }}
+                    </option>
+                    {% endfor %}
+                </select>
+            </div>
+        </div>
+
+        <div class="stat-card stat-card-large">
+            <div class="stat-label">Total for {{ ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"][month-1] }} {{ year }}</div>
+            <div class="stat-value">৳{{ "%.2f"|format(month_total) }}</div>
+        </div>
+
+        <div class="dashboard-grid">
+            <div class="card chart-card">
+                <h2 class="card-title">Category Breakdown</h2>
+                <div class="chart-container">
+                    <canvas id="categoryChart"></canvas>
+                </div>
+            </div>
+
+            <div class="card chart-card">
+                <h2 class="card-title">Monthly Trend</h2>
+                <div class="chart-container">
+                    <canvas id="monthlyChart"></canvas>
+                </div>
+            </div>
+        </div>
+
+        <div class="card">
+            <h2 class="card-title">Category Details</h2>
+            <div class="table-container">
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th>Category</th>
+                            <th>Amount</th>
+                            <th>Transactions</th>
+                            <th>Percentage</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for cat in category_totals %}
+                        <tr>
+                            <td>
+                                <span class="category-dot" style="background-color: {{ category_colors.get(cat.category, '#6b7280') }}"></span>
+                                {{ cat.category }}
+                            </td>
+                            <td>৳{{ "%.2f"|format(cat.total) }}</td>
+                            <td>{{ cat.count }}</td>
+                            <td>
+                                <div class="progress-bar">
+                                    <div class="progress-fill" style="width: {{ (cat.total / month_total * 100) if month_total > 0 else 0 }}%; background-color: {{ category_colors.get(cat.category, '#6b7280') }}"></div>
+                                </div>
+                                <span class="progress-text">{{ "%.1f"|format(cat.total / month_total * 100) if month_total > 0 else 0 }}%</span>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                        {% if not category_totals %}
+                        <tr>
+                            <td colspan="4" class="empty-state">No data for this month</td>
+                        </tr>
+                        {% endif %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <div class="card">
+            <h2 class="card-title">Expenses for {{ ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"][month-1] }} {{ year }}</h2>
+            <div class="expense-list">
+                {% if month_expenses %}
+                    {% set current_date = namespace(value='') %}
+                    {% for expense in month_expenses %}
+                        {% if expense.date != current_date.value %}
+                            {% if not loop.first %}
+                                </div>
+                            {% endif %}
+                            <div class="date-group">
+                                <h3 class="date-header">{{ expense.date }}</h3>
+                            {% set current_date.value = expense.date %}
+                        {% endif %}
+                        <div class="expense-item" data-id="{{ expense.id }}">
+                            <div class="expense-info">
+                                <div class="expense-description">{{ expense.description }}</div>
+                                <span class="category-badge" style="background-color: {{ category_colors.get(expense.category, '#6b7280') }}">
+                                    {{ expense.category }}
+                                </span>
+                            </div>
+                            <div class="expense-actions">
+                                <span class="expense-amount">৳{{ "%.2f"|format(expense.amount) }}</span>
+                                <button class="btn-delete" onclick="deleteExpense({{ expense.id }})">&times;</button>
+                            </div>
+                        </div>
+                    {% endfor %}
+                    </div>
+                {% else %}
+                    <div class="empty-state">
+                        <p>No expenses for this month</p>
+                    </div>
+                {% endif %}
+            </div>
+        </div>
+    </main>
+
+    <div id="toast" class="toast"></div>
+
+    <script>
+        const categoryTotals = {{ category_totals | tojson }};
+        const monthlyTotals = {{ monthly_totals | tojson }};
+        const categoryColors = {{ category_colors | tojson }};
+    </script>
+    <script src="{{ url_for('static', filename='script.js') }}"></script>
+</body>
+</html>
