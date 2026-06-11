@@ -70,18 +70,16 @@ def init_db():
                 )
             """)
             )
-            try:
+            result = conn.execute(
+                text("SELECT column_name FROM information_schema.columns WHERE table_name = 'expenses' AND column_name = 'user_id'")
+            )
+            if not result.fetchone():
                 conn.execute(
                     text("ALTER TABLE expenses ADD COLUMN user_id INTEGER DEFAULT 1")
                 )
-            except Exception:
-                pass
-            try:
-                conn.execute(
-                    text("CREATE INDEX IF NOT EXISTS idx_expenses_user ON expenses(user_id)")
-                )
-            except Exception:
-                pass
+            conn.execute(
+                text("CREATE INDEX IF NOT EXISTS idx_expenses_user ON expenses(user_id)")
+            )
         else:
             conn.execute(
                 text("""
