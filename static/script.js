@@ -106,7 +106,6 @@ document.addEventListener('click', (e) => {
   const menuToggle = document.getElementById('menuToggle');
   const overlay = document.getElementById('sidebarOverlay');
   const sidebarToggle = document.getElementById('sidebarToggle');
-  const sidebarExpand = document.getElementById('sidebarExpand');
 
   if (e.target.closest('#menuToggle')) {
     document.body.classList.toggle('sidebar-open');
@@ -122,10 +121,6 @@ document.addEventListener('click', (e) => {
     } else {
       document.body.classList.remove('sidebar-open');
     }
-  }
-
-  if (e.target.closest('#sidebarExpand')) {
-    document.body.classList.remove('sidebar-collapsed');
   }
 });
 
