@@ -418,11 +418,12 @@ def api_category_breakdown():
     month = request.args.get("month", type=int)
     category = request.args.get("category", "").strip()
     page = request.args.get("page", 1, type=int)
+    per_page = request.args.get("per_page", 50, type=int)
     if not year or not month or not category:
         return jsonify({"error": "year, month, and category required"}), 400
     filter_user_id = request.args.get("user_id", type=int)
     effective_user_id = filter_user_id if is_super else uid
-    data = db.get_expenses_by_category_month(year, month, category, user_id=effective_user_id, page=page)
+    data = db.get_expenses_by_category_month(year, month, category, user_id=effective_user_id, page=page, per_page=per_page)
     for exp in data["expenses"]:
         exp["color"] = CATEGORY_COLORS.get(exp["category"], "#6b7280")
     return jsonify(data)
