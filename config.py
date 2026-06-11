@@ -27,7 +27,6 @@ def enrich_db_url(url=None):
     params = dict(p.split("=", 1) for p in frag.split("&") if p)
     params.setdefault("connect_timeout", "10")
     params.setdefault("sslmode", "require")
-    params.setdefault("pgbouncer", "true")
     return base + "?" + "&".join(f"{k}={v}" for k, v in params.items())
 
 CATEGORY_COLORS = {
