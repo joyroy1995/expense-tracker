@@ -997,6 +997,12 @@ async function renderRoute() {
     return;
   }
 
+  // Show loading spinner immediately for app views
+  if (currentUser && !authViews.includes(view)) {
+    const app = document.getElementById('app');
+    app.innerHTML = '<div class="page-loader"><div class="spinner-lg"></div></div>';
+  }
+
   switch (view) {
     case 'login': renderLogin(); break;
     case 'register': renderRegister(); break;

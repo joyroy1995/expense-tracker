@@ -182,7 +182,7 @@ def api_index():
     page = request.args.get("page", 1, type=int)
     today = datetime.now(TIMEZONE).strftime("%Y-%m-%d")
     today_expenses = db.get_expenses_by_date(today, user_id=uid)
-    today_total = db.get_today_total(user_id=uid)
+    today_total = sum(e["amount"] for e in today_expenses)
     month_total = db.get_month_total(user_id=uid)
     paginated = db.get_recent_expenses_paginated(
         page=page, per_page=20, user_id=None if is_super else uid
