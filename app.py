@@ -9,8 +9,6 @@ from config import USERNAME, PASSWORD, SECRET_KEY, CATEGORY_COLORS, TIMEZONE
 app = Flask(__name__)
 app.secret_key = SECRET_KEY
 
-db.init_db()
-
 
 # ── Close DB connection after each request ─────────────────
 @app.teardown_appcontext

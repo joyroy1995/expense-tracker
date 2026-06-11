@@ -7,6 +7,7 @@ import flask
 import secrets
 
 _engine = None
+_db_init_done = False
 
 
 def get_engine():
@@ -17,9 +18,9 @@ def get_engine():
             _engine = create_engine(
                 url,
                 pool_pre_ping=True,
-                pool_size=2,
-                max_overflow=4,
-                pool_recycle=300,
+                pool_size=1,
+                max_overflow=2,
+                pool_recycle=60,
             )
         else:
             _engine = create_engine(
@@ -28,8 +29,146 @@ def get_engine():
     return _engine
 
 
+def _ensure_init():
+    global _db_init_done
+    if _db_init_done:
+        return
+    _db_init_done = True
+    engine = get_engine()
+    with engine.connect() as conn:
+        _init_schema(conn)
+        conn.commit()
+    _run_migrations()
+    _seed_superuser()
+
+
+def _init_schema(conn):
+    if _is_postgres():
+        conn.execute(
+            text("""
+            CREATE TABLE IF NOT EXISTS expenses (
+                id SERIAL PRIMARY KEY,
+                date TEXT NOT NULL,
+                description TEXT NOT NULL,
+                amount REAL NOT NULL,
+                category TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        )
+        conn.execute(
+            text("CREATE INDEX IF NOT EXISTS idx_expenses_date ON expenses(date)")
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS idx_expenses_category ON expenses(category)"
+            )
+        )
+        conn.execute(
+            text("""
+            CREATE TABLE IF NOT EXISTS users (
+                id SERIAL PRIMARY KEY,
+                username TEXT UNIQUE NOT NULL,
+                password_hash TEXT NOT NULL,
+                role TEXT NOT NULL DEFAULT 'user',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        )
+        conn.execute(
+            text("""
+            CREATE TABLE IF NOT EXISTS password_resets (
+                id SERIAL PRIMARY KEY,
+                user_id INTEGER NOT NULL REFERENCES users(id),
+                token TEXT NOT NULL UNIQUE,
+                expires_at TIMESTAMP NOT NULL,
+                used INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        )
+        result = conn.execute(
+            text("SELECT column_name FROM information_schema.columns WHERE table_name = 'expenses' AND column_name = 'user_id'")
+        )
+        if not result.fetchone():
+            conn.execute(
+                text("ALTER TABLE expenses ADD COLUMN user_id INTEGER DEFAULT 1")
+            )
+        conn.execute(
+            text("CREATE INDEX IF NOT EXISTS idx_expenses_user ON expenses(user_id)")
+        )
+        conn.execute(
+            text("CREATE INDEX IF NOT EXISTS idx_expenses_user_date ON expenses(user_id, date)")
+        )
+    else:
+        conn.execute(
+            text("""
+            CREATE TABLE IF NOT EXISTS expenses (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                date TEXT NOT NULL,
+                description TEXT NOT NULL,
+                amount REAL NOT NULL,
+                category TEXT NOT NULL,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        )
+        conn.execute(
+            text("CREATE INDEX IF NOT EXISTS idx_expenses_date ON expenses(date)")
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS idx_expenses_category ON expenses(category)"
+            )
+        )
+        conn.execute(
+            text("""
+            CREATE TABLE IF NOT EXISTS users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT UNIQUE NOT NULL,
+                password_hash TEXT NOT NULL,
+                role TEXT NOT NULL DEFAULT 'user',
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        )
+        conn.execute(
+            text("""
+            CREATE TABLE IF NOT EXISTS password_resets (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                token TEXT NOT NULL UNIQUE,
+                expires_at TEXT NOT NULL,
+                used INTEGER DEFAULT 0,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users(id)
+            )
+        """)
+        )
+        result = conn.execute(text("PRAGMA table_info(expenses)"))
+        cols = [r[1] for r in result]
+        if "user_id" not in cols:
+            conn.execute(
+                text("ALTER TABLE expenses ADD COLUMN user_id INTEGER DEFAULT 1")
+            )
+        conn.execute(
+            text("CREATE INDEX IF NOT EXISTS idx_expenses_user ON expenses(user_id)")  # sqlite
+        )
+        conn.execute(
+            text("CREATE INDEX IF NOT EXISTS idx_expenses_user_date ON expenses(user_id, date)")  # sqlite
+        )
+    conn.execute(
+        text("""
+            CREATE TABLE IF NOT EXISTS migrations (
+                name TEXT PRIMARY KEY,
+                applied_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+    )
+
+
 def get_connection():
-    """Return a database connection, reusing one from the current request context."""
+    _ensure_init()
     if flask.has_request_context():
         if "db_conn" not in g:
             g.db_conn = get_engine().connect()
@@ -46,134 +185,6 @@ def close_connection(exception=None):
 
 def _is_postgres():
     return get_engine().url.drivername.startswith("postgresql")
-
-
-def init_db():
-    engine = get_engine()
-    with engine.connect() as conn:
-        if _is_postgres():
-            conn.execute(
-                text("""
-                CREATE TABLE IF NOT EXISTS expenses (
-                    id SERIAL PRIMARY KEY,
-                    date TEXT NOT NULL,
-                    description TEXT NOT NULL,
-                    amount REAL NOT NULL,
-                    category TEXT NOT NULL,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                )
-            """)
-            )
-            conn.execute(
-                text("CREATE INDEX IF NOT EXISTS idx_expenses_date ON expenses(date)")
-            )
-            conn.execute(
-                text(
-                    "CREATE INDEX IF NOT EXISTS idx_expenses_category ON expenses(category)"
-                )
-            )
-            conn.execute(
-                text("""
-                CREATE TABLE IF NOT EXISTS users (
-                    id SERIAL PRIMARY KEY,
-                    username TEXT UNIQUE NOT NULL,
-                    password_hash TEXT NOT NULL,
-                    role TEXT NOT NULL DEFAULT 'user',
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                )
-            """)
-            )
-            conn.execute(
-                text("""
-                CREATE TABLE IF NOT EXISTS password_resets (
-                    id SERIAL PRIMARY KEY,
-                    user_id INTEGER NOT NULL REFERENCES users(id),
-                    token TEXT NOT NULL UNIQUE,
-                    expires_at TIMESTAMP NOT NULL,
-                    used INTEGER DEFAULT 0,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                )
-            """)
-            )
-            result = conn.execute(
-                text("SELECT column_name FROM information_schema.columns WHERE table_name = 'expenses' AND column_name = 'user_id'")
-            )
-            if not result.fetchone():
-                conn.execute(
-                    text("ALTER TABLE expenses ADD COLUMN user_id INTEGER DEFAULT 1")
-                )
-            conn.execute(
-                text("CREATE INDEX IF NOT EXISTS idx_expenses_user ON expenses(user_id)")  # sqlite
-            )
-            conn.execute(
-                text("CREATE INDEX IF NOT EXISTS idx_expenses_user_date ON expenses(user_id, date)")  # sqlite
-            )
-            conn.execute(
-                text("CREATE INDEX IF NOT EXISTS idx_expenses_user_date ON expenses(user_id, date)")
-            )
-        else:
-            conn.execute(
-                text("""
-                CREATE TABLE IF NOT EXISTS expenses (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    date TEXT NOT NULL,
-                    description TEXT NOT NULL,
-                    amount REAL NOT NULL,
-                    category TEXT NOT NULL,
-                    created_at TEXT DEFAULT CURRENT_TIMESTAMP
-                )
-            """)
-            )
-            conn.execute(
-                text("CREATE INDEX IF NOT EXISTS idx_expenses_date ON expenses(date)")
-            )
-            conn.execute(
-                text(
-                    "CREATE INDEX IF NOT EXISTS idx_expenses_category ON expenses(category)"
-                )
-            )
-            conn.execute(
-                text("""
-                CREATE TABLE IF NOT EXISTS users (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    username TEXT UNIQUE NOT NULL,
-                    password_hash TEXT NOT NULL,
-                    role TEXT NOT NULL DEFAULT 'user',
-                    created_at TEXT DEFAULT CURRENT_TIMESTAMP
-                )
-            """)
-            )
-            conn.execute(
-                text("""
-                CREATE TABLE IF NOT EXISTS password_resets (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    user_id INTEGER NOT NULL,
-                    token TEXT NOT NULL UNIQUE,
-                    expires_at TEXT NOT NULL,
-                    used INTEGER DEFAULT 0,
-                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY (user_id) REFERENCES users(id)
-                )
-            """)
-            )
-            result = conn.execute(text("PRAGMA table_info(expenses)"))
-            cols = [r[1] for r in result]
-            if "user_id" not in cols:
-                conn.execute(
-                    text("ALTER TABLE expenses ADD COLUMN user_id INTEGER DEFAULT 1")
-                )
-        conn.execute(
-            text("""
-                CREATE TABLE IF NOT EXISTS migrations (
-                    name TEXT PRIMARY KEY,
-                    applied_at TEXT DEFAULT CURRENT_TIMESTAMP
-                )
-            """)
-        )
-        conn.commit()
-
-    _run_migrations()
-    _seed_superuser()
 
 
 def _run_migrations():
