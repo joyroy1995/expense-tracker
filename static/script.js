@@ -4,10 +4,12 @@ const preview = document.getElementById('preview');
 const toast = document.getElementById('toast');
 
 let predictTimeout;
+let userModifiedPreview = false;
 
 if (descriptionInput) {
     descriptionInput.addEventListener('input', (e) => {
         clearTimeout(predictTimeout);
+        userModifiedPreview = false;
         const value = e.target.value.trim();
 
         if (value.length < 2) {
@@ -21,6 +23,13 @@ if (descriptionInput) {
     });
 }
 
+function buildCategoryOptions(selectedCategory) {
+    const categories = Object.keys(categoryColors);
+    return categories.map(cat =>
+        `<option value="${cat}" ${cat === selectedCategory ? 'selected' : ''}>${cat}</option>`
+    ).join('');
+}
+
 async function predictExpense(description) {
     try {
         const response = await fetch('/api/predict_expense', {
@@ -31,19 +40,48 @@ async function predictExpense(description) {
         const data = await response.json();
 
         if (data.category && preview) {
+            const catColor = data.color || categoryColors[data.category] || '#6b7280';
             preview.innerHTML = `
-                <div class="preview-card">
-                    <span class="preview-badge" style="background-color: ${data.color}20; color: ${data.color}; border: 1px solid ${data.color}40;">
-                        <span class="preview-dot" style="background-color: ${data.color}"></span>
-                        ${data.category}
-                    </span>
-                    <span class="preview-amount">৳${data.amount.toFixed(2)}</span>
+                <div class="preview-card editable-preview">
+                    <div class="preview-field">
+                        <label class="preview-field-label">Category</label>
+                        <select class="preview-category-select" style="border-color: ${catColor}40;">
+                            ${buildCategoryOptions(data.category)}
+                        </select>
+                    </div>
+                    <div class="preview-field preview-amount-field">
+                        <label class="preview-field-label">Amount (৳)</label>
+                        <div class="preview-amount-input-wrap">
+                            <span class="preview-currency-sign">৳</span>
+                            <input type="number" class="preview-amount-input" step="0.01" min="0" value="${data.amount.toFixed(2)}">
+                        </div>
+                    </div>
                 </div>
             `;
+            preview.querySelectorAll('select, input').forEach(el => {
+                el.addEventListener('change', () => { userModifiedPreview = true; });
+                el.addEventListener('input', () => { userModifiedPreview = true; });
+            });
         }
     } catch (error) {
         console.error('Prediction error:', error);
     }
+}
+
+function getPreviewValues() {
+    const catSelect = preview.querySelector('.preview-category-select');
+    const amtInput = preview.querySelector('.preview-amount-input');
+    if (catSelect && amtInput) {
+        return {
+            category: catSelect.value,
+            amount: parseFloat(amtInput.value) || 0
+        };
+    }
+    return null;
+}
+
+function getTodayStr() {
+    return new Date().toISOString().split('T')[0];
 }
 
 if (expenseForm) {
@@ -59,8 +97,15 @@ if (expenseForm) {
         btnLoader.style.display = 'flex';
 
         const formData = {
+            date: document.getElementById('date').value,
             description: document.getElementById('description').value
         };
+
+        const previewValues = getPreviewValues();
+        if (previewValues) {
+            formData.category = previewValues.category;
+            formData.amount = previewValues.amount;
+        }
 
         try {
             const response = await fetch('/api/add_expense', {
@@ -75,8 +120,14 @@ if (expenseForm) {
                 showToast('Expense added!', 'success');
                 expenseForm.reset();
                 preview.innerHTML = '';
-                addExpenseToList(data);
-                updateTodayTotal(data.amount);
+                userModifiedPreview = false;
+
+                if (data.date === getTodayStr()) {
+                    addExpenseToList(data);
+                    updateTodayTotal(data.amount);
+                } else {
+                    setTimeout(() => location.reload(), 800);
+                }
             } else {
                 showToast(data.error || 'Failed to add expense', 'error');
             }

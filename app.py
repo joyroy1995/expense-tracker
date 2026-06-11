@@ -3,7 +3,7 @@ from functools import wraps
 from datetime import datetime
 import database as db
 from llm_service import extract_expense, predict_expense
-from config import USERNAME, PASSWORD, SECRET_KEY, CATEGORY_COLORS
+from config import USERNAME, PASSWORD, SECRET_KEY, CATEGORY_COLORS, TIMEZONE
 
 app = Flask(__name__)
 app.secret_key = SECRET_KEY
@@ -42,7 +42,7 @@ def logout():
 @app.route("/")
 @login_required
 def index():
-    today = datetime.now().strftime("%Y-%m-%d")
+    today = datetime.now(TIMEZONE).strftime("%Y-%m-%d")
     today_expenses = db.get_expenses_by_date(today)
     today_total = db.get_today_total()
     month_total = db.get_month_total()
@@ -61,7 +61,7 @@ def index():
 @app.route("/dashboard")
 @login_required
 def dashboard():
-    now = datetime.now()
+    now = datetime.now(TIMEZONE)
     year = request.args.get("year", now.year, type=int)
     month = request.args.get("month", now.month, type=int)
 
@@ -91,15 +91,21 @@ def dashboard():
 @login_required
 def api_add_expense():
     data = request.get_json()
-    date = data.get("date", datetime.now().strftime("%Y-%m-%d"))
+    date = data.get("date", datetime.now(TIMEZONE).strftime("%Y-%m-%d"))
     description = data.get("description", "").strip()
 
     if not description:
         return jsonify({"error": "Description required"}), 400
 
-    result = extract_expense(description)
-    category = result["category"]
-    amount = result["amount"]
+    category = data.get("category")
+    amount = data.get("amount")
+
+    if category and amount is not None and float(amount) > 0:
+        amount = float(amount)
+    else:
+        result = extract_expense(description)
+        category = result["category"]
+        amount = result["amount"]
 
     if amount <= 0:
         return jsonify({"error": "Could not extract amount. Please include the amount in your text."}), 400
@@ -158,7 +164,7 @@ def api_expenses_by_date(date):
 @app.route("/api/expenses/month")
 @login_required
 def api_expenses_by_month():
-    now = datetime.now()
+    now = datetime.now(TIMEZONE)
     year = request.args.get("year", now.year, type=int)
     month = request.args.get("month", now.month, type=int)
     expenses = db.get_expenses_by_month(year, month)
@@ -177,7 +183,7 @@ def api_monthly_totals():
 @app.route("/api/expenses/category-totals")
 @login_required
 def api_category_totals():
-    now = datetime.now()
+    now = datetime.now(TIMEZONE)
     year = request.args.get("year", now.year, type=int)
     month = request.args.get("month", now.month, type=int)
     return jsonify(db.get_category_totals_by_month(year, month))

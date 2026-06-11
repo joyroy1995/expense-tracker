@@ -126,6 +126,9 @@
 
     <div id="toast" class="toast"></div>
 
+    <script>
+        const categoryColors = {{ category_colors | tojson }};
+    </script>
     <script src="{{ url_for('static', filename='script.js') }}"></script>
 </body>
 </html>

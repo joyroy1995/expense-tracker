@@ -1,6 +1,8 @@
 import os
+from zoneinfo import ZoneInfo
 
 SECRET_KEY = os.environ.get("SECRET_KEY", "change-this-to-a-random-secret-key")
+TIMEZONE = ZoneInfo("Asia/Dhaka")
 
 USERNAME = os.environ.get("APP_USERNAME", "admin")
 PASSWORD = os.environ.get("APP_PASSWORD", "admin123")

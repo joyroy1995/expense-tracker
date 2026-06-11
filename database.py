@@ -1,6 +1,6 @@
 from sqlalchemy import create_engine, text
 from datetime import datetime
-from config import DATABASE_URL, DATABASE_PATH
+from config import DATABASE_URL, DATABASE_PATH, TIMEZONE
 
 _engine = None
 
@@ -166,7 +166,7 @@ def get_monthly_totals(months=6):
 def get_today_total():
     engine = get_engine()
     with engine.connect() as conn:
-        today = datetime.now().strftime("%Y-%m-%d")
+        today = datetime.now(TIMEZONE).strftime("%Y-%m-%d")
         result = conn.execute(
             text(
                 "SELECT COALESCE(SUM(amount), 0) as total FROM expenses WHERE date = :date"
@@ -180,7 +180,7 @@ def get_today_total():
 def get_month_total():
     engine = get_engine()
     with engine.connect() as conn:
-        month_pattern = datetime.now().strftime("%Y-%m") + "%"
+        month_pattern = datetime.now(TIMEZONE).strftime("%Y-%m") + "%"
         result = conn.execute(
             text(
                 "SELECT COALESCE(SUM(amount), 0) as total FROM expenses WHERE date LIKE :pattern"
