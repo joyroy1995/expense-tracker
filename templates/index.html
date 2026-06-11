@@ -6,156 +6,32 @@
     <title>Expense Tracker</title>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
 <body>
-    <nav class="navbar">
-        <div class="nav-brand">
-            <span class="logo-icon">৳</span>
-            <span>Expense Tracker</span>
+    <button class="menu-toggle" id="menuToggle">☰</button>
+    <button class="sidebar-expand" id="sidebarExpand">›</button>
+    <nav id="sidebar" class="sidebar" style="display:none;">
+        <div class="sidebar-header">
+            <div class="sidebar-brand">
+                <span class="logo-icon">৳</span>
+                <span>Expense Tracker</span>
+            </div>
+            <button class="sidebar-toggle" id="sidebarToggle">‹</button>
         </div>
-        <div class="nav-links">
-            <a href="/" class="nav-link active">Home</a>
-            <a href="/dashboard" class="nav-link">Dashboard</a>
-            <a href="/profile" class="nav-link">Profile</a>
-            {% if role == 'superuser' %}
-            <a href="/admin/users" class="nav-link">Admin</a>
-            {% endif %}
-            <a href="/logout" class="nav-link nav-logout">Logout</a>
+        <div class="sidebar-links">
+            <a href="/" class="nav-link" data-link>Home</a>
+            <a href="/dashboard" class="nav-link" data-link>Dashboard</a>
+            <a href="/profile" class="nav-link" data-link>Profile</a>
+            <a href="/admin/users" class="nav-link" data-link id="adminLink" style="display:none;">Admin</a>
+        </div>
+        <div class="sidebar-footer">
+            <a href="#" class="nav-link nav-logout" id="logoutBtn">Logout</a>
         </div>
     </nav>
-
-    <main class="container">
-        <div class="stats-grid">
-            <div class="stat-card">
-                <div class="stat-label">Today's Total</div>
-                <div class="stat-value">৳{{ "%.2f"|format(today_total) }}</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-label">Monthly Total</div>
-                <div class="stat-value">৳{{ "%.2f"|format(month_total) }}</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-label">Today's Expenses</div>
-                <div class="stat-value">{{ today_expenses|length }}</div>
-            </div>
-        </div>
-
-        <div class="main-grid">
-            <div class="card add-expense-card">
-                <h2 class="card-title">Add Expense</h2>
-                <form id="expenseForm" class="expense-form">
-                    <div class="form-row">
-                        <div class="form-group form-date">
-                            <label for="date">Date</label>
-                            <input type="date" id="date" name="date" value="{{ today }}" required>
-                        </div>
-                        <div class="form-group form-desc">
-                            <label for="description">What did you spend?</label>
-                            <input type="text" id="description" name="description" required placeholder="e.g., badam 30 taka, rickshaw 50 tk" autocomplete="off">
-                            <div id="preview" class="preview-container"></div>
-                        </div>
-                    </div>
-                    <button type="submit" class="btn btn-primary btn-full btn-lg" id="submitBtn">
-                        <span class="btn-text">Add Expense</span>
-                        <span class="btn-loader" style="display:none;">
-                            <span class="spinner"></span>
-                        </span>
-                    </button>
-                </form>
-            </div>
-
-            <div class="card today-card">
-                <h2 class="card-title">Today's Expenses</h2>
-                <div id="todayExpenses" class="expense-list">
-                    {% if today_expenses %}
-                        {% for expense in today_expenses %}
-                        <div class="expense-item" data-id="{{ expense.id }}">
-                            <div class="expense-info">
-                                <div class="expense-description">{{ expense.description }}</div>
-                                <span class="category-badge" style="background-color: {{ category_colors.get(expense.category, '#6b7280') }}">
-                                    {{ expense.category }}
-                                </span>
-                            </div>
-                            <div class="expense-actions">
-                                <span class="expense-amount">৳{{ "%.2f"|format(expense.amount) }}</span>
-                                <button class="btn-delete" onclick="deleteExpense({{ expense.id }})">&times;</button>
-                            </div>
-                        </div>
-                        {% endfor %}
-                    {% else %}
-                        <div class="empty-state">
-                            <p>No expenses today. Add your first one!</p>
-                        </div>
-                    {% endif %}
-                </div>
-            </div>
-        </div>
-
-        <div class="card recent-card">
-            <div class="card-header-row">
-                <h2 class="card-title" style="margin-bottom:0;">Recent Activity</h2>
-                <span class="expense-count">{{ recent_total }} expense(s)</span>
-            </div>
-            <div id="recentExpenses" class="expense-list">
-                {% if recent_expenses %}
-                    {% set current_date = namespace(value='') %}
-                    {% for expense in recent_expenses %}
-                        {% if expense.date != current_date.value %}
-                            {% if not loop.first %}
-                                </div>
-                            {% endif %}
-                            <div class="date-group">
-                                <h3 class="date-header">{{ expense.date }}</h3>
-                            {% set current_date.value = expense.date %}
-                        {% endif %}
-                        <div class="expense-item" data-id="{{ expense.id }}">
-                            <div class="expense-info">
-                                <div class="expense-description">{{ expense.description }}</div>
-                                <span class="category-badge" style="background-color: {{ category_colors.get(expense.category, '#6b7280') }}">
-                                    {{ expense.category }}
-                                </span>
-                            </div>
-                            <div class="expense-actions">
-                                <span class="expense-amount">৳{{ "%.2f"|format(expense.amount) }}</span>
-                                <button class="btn-delete" onclick="deleteExpense({{ expense.id }})">&times;</button>
-                            </div>
-                        </div>
-                    {% endfor %}
-                    </div>
-                {% else %}
-                    <div class="empty-state">
-                        <p>No expenses yet. Start tracking!</p>
-                    </div>
-                {% endif %}
-            </div>
-
-            {% if recent_total_pages > 1 %}
-            <div class="pagination">
-                {% if recent_page > 1 %}
-                <a href="?page={{ recent_page - 1 }}" class="page-link">&laquo; Prev</a>
-                {% endif %}
-                {% for p in range(1, recent_total_pages + 1) %}
-                    {% if p == recent_page %}
-                    <span class="page-link page-current">{{ p }}</span>
-                    {% elif p <= 3 or p > recent_total_pages - 3 or (p >= recent_page - 1 and p <= recent_page + 1) %}
-                    <a href="?page={{ p }}" class="page-link">{{ p }}</a>
-                    {% elif p == 4 and recent_page > 5 or p == recent_total_pages - 3 and recent_page < recent_total_pages - 4 %}
-                    <span class="page-dots">...</span>
-                    {% endif %}
-                {% endfor %}
-                {% if recent_page < recent_total_pages %}
-                <a href="?page={{ recent_page + 1 }}" class="page-link">Next &raquo;</a>
-                {% endif %}
-            </div>
-            {% endif %}
-        </div>
-    </main>
-
+    <div class="sidebar-overlay" id="sidebarOverlay"></div>
+    <main id="app" class="container"></main>
     <div id="toast" class="toast"></div>
-
-    <script>
-        const categoryColors = {{ category_colors | tojson }};
-    </script>
     <script src="{{ url_for('static', filename='script.js') }}"></script>
 </body>
 </html>

@@ -2,7 +2,6 @@ from flask import Flask, render_template, request, redirect, url_for, session, j
 from functools import wraps
 from datetime import datetime
 from werkzeug.security import generate_password_hash, check_password_hash
-import math
 import database as db
 from llm_service import extract_expense, predict_expense
 from config import USERNAME, PASSWORD, SECRET_KEY, CATEGORY_COLORS, TIMEZONE
@@ -13,13 +12,13 @@ app.secret_key = SECRET_KEY
 db.init_db()
 
 
-# ── Auth decorators ─────────────────────────────────────────
+# ── Auth decorators (JSON) ─────────────────────────────────
 
 def login_required(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
         if "user_id" not in session:
-            return redirect(url_for("login"))
+            return jsonify({"error": "Unauthorized"}), 401
         return f(*args, **kwargs)
     return decorated_function
 
@@ -28,134 +27,139 @@ def superuser_required(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
         if "user_id" not in session:
-            return redirect(url_for("login"))
+            return jsonify({"error": "Unauthorized"}), 401
         if session.get("role") != "superuser":
-            return redirect(url_for("index"))
+            return jsonify({"error": "Forbidden"}), 403
         return f(*args, **kwargs)
     return decorated_function
 
 
-# ── Auth routes ─────────────────────────────────────────────
+# ── API: Auth ──────────────────────────────────────────────
 
-@app.route("/login", methods=["GET", "POST"])
-def login():
-    if request.method == "POST":
-        username = request.form.get("username", "").strip()
-        password = request.form.get("password", "").strip()
-        user = db.get_user_by_username(username)
-        if user and check_password_hash(user["password_hash"], password):
-            session["user_id"] = user["id"]
-            session["username"] = user["username"]
-            session["role"] = user["role"]
-            return redirect(url_for("index"))
-        return render_template("login.html", error="Invalid credentials")
-    return render_template("login.html")
+@app.route("/api/me")
+def api_me():
+    if "user_id" not in session:
+        return jsonify({"error": "Unauthorized"}), 401
+    return jsonify({
+        "id": session["user_id"],
+        "username": session.get("username"),
+        "role": session.get("role"),
+    })
 
 
-@app.route("/register", methods=["GET", "POST"])
-def register():
-    if request.method == "POST":
-        username = request.form.get("username", "").strip()
-        password = request.form.get("password", "").strip()
-        confirm = request.form.get("confirm", "").strip()
-
-        if not username or not password:
-            return render_template("register.html", error="All fields required")
-        if len(username) < 3:
-            return render_template("register.html", error="Username must be at least 3 characters")
-        if len(password) < 4:
-            return render_template("register.html", error="Password must be at least 4 characters")
-        if password != confirm:
-            return render_template("register.html", error="Passwords do not match")
-        if db.get_user_by_username(username):
-            return render_template("register.html", error="Username already taken")
-
-        pw_hash = generate_password_hash(password)
-        user_id = db.create_user(username, pw_hash)
-        if user_id is None:
-            return render_template("register.html", error="Registration failed")
-
-        session["user_id"] = user_id
-        session["username"] = username
-        user = db.get_user_by_id(user_id)
+@app.route("/api/login", methods=["POST"])
+def api_login():
+    data = request.get_json()
+    username = data.get("username", "").strip()
+    password = data.get("password", "").strip()
+    user = db.get_user_by_username(username)
+    if user and check_password_hash(user["password_hash"], password):
+        session["user_id"] = user["id"]
+        session["username"] = user["username"]
         session["role"] = user["role"]
-        return redirect(url_for("index"))
-    return render_template("register.html")
+        return jsonify({"id": user["id"], "username": user["username"], "role": user["role"]})
+    return jsonify({"error": "Invalid credentials"}), 401
 
 
-@app.route("/logout")
-def logout():
-    session.pop("user_id", None)
-    session.pop("username", None)
-    session.pop("role", None)
-    return redirect(url_for("login"))
+@app.route("/api/register", methods=["POST"])
+def api_register():
+    data = request.get_json()
+    username = data.get("username", "").strip()
+    password = data.get("password", "").strip()
+    confirm = data.get("confirm", "").strip()
+
+    if not username or not password:
+        return jsonify({"error": "All fields required"}), 400
+    if len(username) < 3:
+        return jsonify({"error": "Username must be at least 3 characters"}), 400
+    if len(password) < 4:
+        return jsonify({"error": "Password must be at least 4 characters"}), 400
+    if password != confirm:
+        return jsonify({"error": "Passwords do not match"}), 400
+    if db.get_user_by_username(username):
+        return jsonify({"error": "Username already taken"}), 400
+
+    pw_hash = generate_password_hash(password)
+    user_id = db.create_user(username, pw_hash)
+    if user_id is None:
+        return jsonify({"error": "Registration failed"}), 400
+
+    session["user_id"] = user_id
+    session["username"] = username
+    user = db.get_user_by_id(user_id)
+    session["role"] = user["role"]
+    return jsonify({"id": user_id, "username": username, "role": user["role"]})
 
 
-@app.route("/forgot-password", methods=["GET", "POST"])
-def forgot_password():
-    if request.method == "POST":
-        username = request.form.get("username", "").strip()
-        user = db.get_user_by_username(username)
-        if not user:
-            return render_template("forgot_password.html", error="Username not found")
-        token = db.create_reset_token(user["id"])
-        return redirect(url_for("reset_password", token=token))
-    return render_template("forgot_password.html")
+@app.route("/api/logout", methods=["POST"])
+def api_logout():
+    session.clear()
+    return jsonify({"success": True})
 
 
-@app.route("/reset-password/<token>", methods=["GET", "POST"])
-def reset_password(token):
+@app.route("/api/forgot-password", methods=["POST"])
+def api_forgot_password():
+    data = request.get_json()
+    username = data.get("username", "").strip()
+    user = db.get_user_by_username(username)
+    if not user:
+        return jsonify({"error": "Username not found"}), 404
+    token = db.create_reset_token(user["id"])
+    return jsonify({"token": token})
+
+
+@app.route("/api/reset/<token>")
+def api_validate_reset_token(token):
     record = db.validate_reset_token(token)
     if not record:
-        return render_template("reset_password.html", error="Invalid or expired reset link", valid=False)
-
-    if request.method == "POST":
-        password = request.form.get("password", "").strip()
-        confirm = request.form.get("confirm", "").strip()
-        if len(password) < 4:
-            return render_template("reset_password.html", error="Password must be at least 4 characters", valid=True)
-        if password != confirm:
-            return render_template("reset_password.html", error="Passwords do not match", valid=True)
-        pw_hash = generate_password_hash(password)
-        if db.use_reset_token(token, pw_hash):
-            return redirect(url_for("login"))
-        return render_template("reset_password.html", error="Reset failed. Try again.", valid=True)
-    return render_template("reset_password.html", valid=True)
+        return jsonify({"error": "Invalid or expired reset link"}), 400
+    return jsonify({"valid": True})
 
 
-# ── Profile routes ──────────────────────────────────────────
+@app.route("/api/reset-password/<token>", methods=["POST"])
+def api_reset_password(token):
+    data = request.get_json()
+    password = data.get("password", "").strip()
+    confirm = data.get("confirm", "").strip()
+    if len(password) < 4:
+        return jsonify({"error": "Password must be at least 4 characters"}), 400
+    if password != confirm:
+        return jsonify({"error": "Passwords do not match"}), 400
+    pw_hash = generate_password_hash(password)
+    if db.use_reset_token(token, pw_hash):
+        return jsonify({"success": True})
+    return jsonify({"error": "Reset failed"}), 400
 
-@app.route("/profile", methods=["GET"])
+
+# ── API: Profile ───────────────────────────────────────────
+
+@app.route("/api/profile")
 @login_required
-def profile():
+def api_profile():
     stats = db.get_user_expense_stats(session["user_id"])
     if stats is None:
-        session.clear()
-        return redirect(url_for("login"))
-    return render_template("profile.html", stats=stats)
+        return jsonify({"error": "User not found"}), 404
+    return jsonify(stats)
 
 
-@app.route("/profile/change-password", methods=["POST"])
+@app.route("/api/profile/change-password", methods=["POST"])
 @login_required
-def change_password():
+def api_change_password():
+    data = request.get_json()
     user = db.get_user_by_id(session["user_id"])
     if user is None:
-        session.clear()
-        return redirect(url_for("login"))
+        return jsonify({"error": "User not found"}), 404
 
-    current = request.form.get("current_password", "").strip()
-    new_pass = request.form.get("new_password", "").strip()
-    confirm = request.form.get("confirm_password", "").strip()
+    current = data.get("current_password", "").strip()
+    new_pass = data.get("new_password", "").strip()
+    confirm = data.get("confirm_password", "").strip()
 
     if not check_password_hash(user["password_hash"], current):
-        stats = db.get_user_expense_stats(session["user_id"])
-        return render_template("profile.html", stats=stats, pw_error="Current password is incorrect")
+        return jsonify({"error": "Current password is incorrect"}), 400
     if len(new_pass) < 4:
-        stats = db.get_user_expense_stats(session["user_id"])
-        return render_template("profile.html", stats=stats, pw_error="New password must be at least 4 characters")
+        return jsonify({"error": "New password must be at least 4 characters"}), 400
     if new_pass != confirm:
-        stats = db.get_user_expense_stats(session["user_id"])
-        return render_template("profile.html", stats=stats, pw_error="Passwords do not match")
+        return jsonify({"error": "Passwords do not match"}), 400
 
     pw_hash = generate_password_hash(new_pass)
     engine = db.get_engine()
@@ -165,48 +169,14 @@ def change_password():
             {"p": pw_hash, "id": session["user_id"]},
         )
         conn.commit()
-    stats = db.get_user_expense_stats(session["user_id"])
-    return render_template("profile.html", stats=stats, pw_success="Password updated successfully")
+    return jsonify({"success": True})
 
 
-# ── Superuser admin routes ──────────────────────────────────
+# ── API: Index (home page data) ────────────────────────────
 
-@app.route("/admin/users")
+@app.route("/api/index")
 @login_required
-@superuser_required
-def admin_users():
-    users = db.get_all_users()
-    return render_template("admin_users.html", users=users)
-
-
-@app.route("/admin/users/<int:user_id>/change-role", methods=["POST"])
-@login_required
-@superuser_required
-def admin_change_role(user_id):
-    if user_id == session["user_id"]:
-        return redirect(url_for("admin_users"))
-    user = db.get_user_by_id(user_id)
-    if not user:
-        return redirect(url_for("admin_users"))
-    new_role = "user" if user["role"] == "superuser" else "superuser"
-    db.update_user_role(user_id, new_role)
-    return redirect(url_for("admin_users"))
-
-
-@app.route("/admin/users/<int:user_id>/delete", methods=["POST"])
-@login_required
-@superuser_required
-def admin_delete_user(user_id):
-    if user_id != session["user_id"]:
-        db.delete_user(user_id)
-    return redirect(url_for("admin_users"))
-
-
-# ── Main routes ─────────────────────────────────────────────
-
-@app.route("/")
-@login_required
-def index():
+def api_index():
     uid = session["user_id"]
     is_super = session.get("role") == "superuser"
     page = request.args.get("page", 1, type=int)
@@ -217,24 +187,28 @@ def index():
     paginated = db.get_recent_expenses_paginated(
         page=page, per_page=20, user_id=None if is_super else uid
     )
-    return render_template(
-        "index.html",
-        today_expenses=today_expenses,
-        today_total=today_total,
-        month_total=month_total,
-        recent_expenses=paginated["expenses"],
-        recent_page=paginated["page"],
-        recent_total_pages=paginated["total_pages"],
-        recent_total=paginated["total"],
-        today=today,
-        category_colors=CATEGORY_COLORS,
-        role=session.get("role"),
-    )
+    for exp in today_expenses:
+        exp["color"] = CATEGORY_COLORS.get(exp["category"], "#6b7280")
+    for exp in paginated["expenses"]:
+        exp["color"] = CATEGORY_COLORS.get(exp["category"], "#6b7280")
+    return jsonify({
+        "today": today,
+        "today_total": today_total,
+        "month_total": month_total,
+        "today_expenses": today_expenses,
+        "recent_expenses": paginated["expenses"],
+        "recent_page": paginated["page"],
+        "recent_total_pages": paginated["total_pages"],
+        "recent_total": paginated["total"],
+        "category_colors": CATEGORY_COLORS,
+    })
 
 
-@app.route("/dashboard")
+# ── API: Dashboard ─────────────────────────────────────────
+
+@app.route("/api/dashboard")
 @login_required
-def dashboard():
+def api_dashboard():
     uid = session["user_id"]
     now = datetime.now(TIMEZONE)
     year = request.args.get("year", now.year, type=int)
@@ -245,7 +219,7 @@ def dashboard():
 
     is_super = session.get("role") == "superuser"
     if is_super:
-        effective_user_id = filter_user_id  # None = all
+        effective_user_id = filter_user_id
     else:
         effective_user_id = uid
         filter_user_id = uid
@@ -254,106 +228,77 @@ def dashboard():
     monthly_totals = db.get_monthly_totals(months=12, user_id=effective_user_id)
 
     paginated = db.get_expenses_filtered(
-        year=year,
-        month=month,
+        year=year, month=month,
         user_id=effective_user_id,
         search=search if search else None,
-        page=page,
-        per_page=20,
+        page=page, per_page=20,
     )
 
     month_total = sum(t["total"] for t in category_totals)
     db_years = db.get_distinct_years(user_id=effective_user_id if not is_super else None)
     years = sorted(set(db_years + [now.year, now.year + 1, now.year + 2, now.year + 3]))
-
     users_list = db.get_all_users() if is_super else []
 
-    return render_template(
-        "dashboard.html",
-        category_totals=category_totals,
-        monthly_totals=monthly_totals,
-        month_total=month_total,
-        year=year,
-        month=month,
-        years=years,
-        page=paginated["page"],
-        per_page=paginated["per_page"],
-        total=paginated["total"],
-        total_pages=paginated["total_pages"],
-        month_expenses=paginated["expenses"],
-        search_query=search,
-        filter_user_id=filter_user_id,
-        users_list=users_list,
-        category_colors=CATEGORY_COLORS,
-        role=session.get("role"),
-    )
+    for exp in paginated["expenses"]:
+        exp["color"] = CATEGORY_COLORS.get(exp["category"], "#6b7280")
+
+    return jsonify({
+        "category_totals": category_totals,
+        "monthly_totals": monthly_totals,
+        "month_total": month_total,
+        "year": year,
+        "month": month,
+        "years": years,
+        "page": paginated["page"],
+        "per_page": paginated["per_page"],
+        "total": paginated["total"],
+        "total_pages": paginated["total_pages"],
+        "month_expenses": paginated["expenses"],
+        "search_query": search,
+        "filter_user_id": filter_user_id,
+        "users_list": users_list,
+        "category_colors": CATEGORY_COLORS,
+        "role": session.get("role"),
+    })
 
 
-# ── Export routes ────────────────────────────────────────────
+# ── API: Admin ─────────────────────────────────────────────
 
-@app.route("/api/export/<fmt>")
+@app.route("/api/admin/users")
 @login_required
-def api_export(fmt):
-    uid = session["user_id"]
-    is_super = session.get("role") == "superuser"
-    now = datetime.now(TIMEZONE)
-    year = request.args.get("year", now.year, type=int)
-    month = request.args.get("month", now.month, type=int)
-    search = request.args.get("search", "").strip()
-    filter_user_id = request.args.get("user_id", type=int)
-
-    if is_super:
-        effective_user_id = filter_user_id
-    else:
-        effective_user_id = uid
-
-    expenses = db.get_expenses_export(
-        year=year,
-        month=month,
-        user_id=effective_user_id,
-        search=search if search else None,
-    )
-
-    filename = f"expenses_{year}_{month:02d}"
-
-    if fmt == "csv":
-        from export_service import generate_csv
-        data = generate_csv(expenses, year, month)
-        return (
-            data,
-            200,
-            {
-                "Content-Type": "text/csv",
-                "Content-Disposition": f'attachment; filename="{filename}.csv"',
-            },
-        )
-    elif fmt == "xlsx":
-        from export_service import generate_xlsx
-        buf = generate_xlsx(expenses, year, month)
-        return (
-            buf.read(),
-            200,
-            {
-                "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                "Content-Disposition": f'attachment; filename="{filename}.xlsx"',
-            },
-        )
-    elif fmt == "pdf":
-        from export_service import generate_pdf
-        buf = generate_pdf(expenses, year, month)
-        return (
-            buf.read(),
-            200,
-            {
-                "Content-Type": "application/pdf",
-                "Content-Disposition": f'attachment; filename="{filename}.pdf"',
-            },
-        )
-    else:
-        return jsonify({"error": "Unsupported format. Use csv, xlsx, or pdf."}), 400
+@superuser_required
+def api_admin_users():
+    users = db.get_all_users()
+    for u in users:
+        u.pop("password_hash", None)
+    return jsonify({"users": users})
 
 
-# ── API routes ──────────────────────────────────────────────
+@app.route("/api/admin/users/<int:user_id>/change-role", methods=["POST"])
+@login_required
+@superuser_required
+def api_admin_change_role(user_id):
+    if user_id == session["user_id"]:
+        return jsonify({"error": "Cannot change own role"}), 400
+    user = db.get_user_by_id(user_id)
+    if not user:
+        return jsonify({"error": "User not found"}), 404
+    new_role = "user" if user["role"] == "superuser" else "superuser"
+    db.update_user_role(user_id, new_role)
+    return jsonify({"success": True, "new_role": new_role})
+
+
+@app.route("/api/admin/users/<int:user_id>/delete", methods=["POST"])
+@login_required
+@superuser_required
+def api_admin_delete_user(user_id):
+    if user_id == session["user_id"]:
+        return jsonify({"error": "Cannot delete yourself"}), 400
+    db.delete_user(user_id)
+    return jsonify({"success": True})
+
+
+# ── Existing API routes (unchanged) ────────────────────────
 
 @app.route("/api/add_expense", methods=["POST"])
 @login_required
@@ -459,6 +404,74 @@ def api_category_totals():
     year = request.args.get("year", now.year, type=int)
     month = request.args.get("month", now.month, type=int)
     return jsonify(db.get_category_totals_by_month(year, month, user_id=uid))
+
+
+# ── Export routes ────────────────────────────────────────────
+
+@app.route("/api/export/<fmt>")
+@login_required
+def api_export(fmt):
+    uid = session["user_id"]
+    is_super = session.get("role") == "superuser"
+    now = datetime.now(TIMEZONE)
+    year = request.args.get("year", now.year, type=int)
+    month = request.args.get("month", now.month, type=int)
+    search = request.args.get("search", "").strip()
+    filter_user_id = request.args.get("user_id", type=int)
+
+    if is_super:
+        effective_user_id = filter_user_id
+    else:
+        effective_user_id = uid
+
+    expenses = db.get_expenses_export(
+        year=year, month=month,
+        user_id=effective_user_id,
+        search=search if search else None,
+    )
+
+    filename = f"expenses_{year}_{month:02d}"
+
+    if fmt == "csv":
+        from export_service import generate_csv
+        data = generate_csv(expenses, year, month)
+        return (
+            data, 200,
+            {
+                "Content-Type": "text/csv",
+                "Content-Disposition": f'attachment; filename="{filename}.csv"',
+            },
+        )
+    elif fmt == "xlsx":
+        from export_service import generate_xlsx
+        buf = generate_xlsx(expenses, year, month)
+        return (
+            buf.read(), 200,
+            {
+                "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                "Content-Disposition": f'attachment; filename="{filename}.xlsx"',
+            },
+        )
+    elif fmt == "pdf":
+        from export_service import generate_pdf
+        buf = generate_pdf(expenses, year, month)
+        return (
+            buf.read(), 200,
+            {
+                "Content-Type": "application/pdf",
+                "Content-Disposition": f'attachment; filename="{filename}.pdf"',
+            },
+        )
+    else:
+        return jsonify({"error": "Unsupported format. Use csv, xlsx, or pdf."}), 400
+
+
+# ── SPA catch-all ─────────────────────────────────────────
+
+@app.route("/")
+@app.route("/<path:path>")
+def spa_shell(path=None):
+    return render_template("index.html")
 
 
 if __name__ == "__main__":
