@@ -12,6 +12,12 @@ app.secret_key = SECRET_KEY
 db.init_db()
 
 
+# ── Close DB connection after each request ─────────────────
+@app.teardown_appcontext
+def shutdown_db_connection(exception=None):
+    db.close_connection()
+
+
 # ── Auth decorators (JSON) ─────────────────────────────────
 
 def login_required(f):
@@ -162,13 +168,12 @@ def api_change_password():
         return jsonify({"error": "Passwords do not match"}), 400
 
     pw_hash = generate_password_hash(new_pass)
-    engine = db.get_engine()
-    with engine.connect() as conn:
-        conn.execute(
-            db.text("UPDATE users SET password_hash = :p WHERE id = :id"),
-            {"p": pw_hash, "id": session["user_id"]},
-        )
-        conn.commit()
+    conn = db.get_connection()
+    conn.execute(
+        db.text("UPDATE users SET password_hash = :p WHERE id = :id"),
+        {"p": pw_hash, "id": session["user_id"]},
+    )
+    conn.commit()
     return jsonify({"success": True})
 
 

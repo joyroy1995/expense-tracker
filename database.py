@@ -1,7 +1,9 @@
 from sqlalchemy import create_engine, text
 from datetime import datetime, timedelta
-from config import DATABASE_URL, DATABASE_PATH, TIMEZONE
+from config import DATABASE_URL, DATABASE_PATH, TIMEZONE, enrich_db_url
 from werkzeug.security import generate_password_hash
+from flask import g
+import flask
 import secrets
 
 _engine = None
@@ -10,13 +12,36 @@ _engine = None
 def get_engine():
     global _engine
     if _engine is None:
-        if DATABASE_URL:
-            _engine = create_engine(DATABASE_URL, pool_pre_ping=True, pool_size=5)
+        url = enrich_db_url(DATABASE_URL)
+        if url:
+            _engine = create_engine(
+                url,
+                pool_pre_ping=True,
+                pool_size=2,
+                max_overflow=4,
+                pool_recycle=300,
+            )
         else:
             _engine = create_engine(
                 f"sqlite:///{DATABASE_PATH}", connect_args={"check_same_thread": False}
             )
     return _engine
+
+
+def get_connection():
+    """Return a database connection, reusing one from the current request context."""
+    if flask.has_request_context():
+        if "db_conn" not in g:
+            g.db_conn = get_engine().connect()
+        return g.db_conn
+    return get_engine().connect()
+
+
+def close_connection(exception=None):
+    """Close the request-scoped database connection (called by teardown_appcontext)."""
+    conn = g.pop("db_conn", None)
+    if conn is not None:
+        conn.close()
 
 
 def _is_postgres():
@@ -78,7 +103,13 @@ def init_db():
                     text("ALTER TABLE expenses ADD COLUMN user_id INTEGER DEFAULT 1")
                 )
             conn.execute(
-                text("CREATE INDEX IF NOT EXISTS idx_expenses_user ON expenses(user_id)")
+                text("CREATE INDEX IF NOT EXISTS idx_expenses_user ON expenses(user_id)")  # sqlite
+            )
+            conn.execute(
+                text("CREATE INDEX IF NOT EXISTS idx_expenses_user_date ON expenses(user_id, date)")  # sqlite
+            )
+            conn.execute(
+                text("CREATE INDEX IF NOT EXISTS idx_expenses_user_date ON expenses(user_id, date)")
             )
         else:
             conn.execute(
@@ -197,175 +228,161 @@ def _seed_superuser():
 # ── User functions ──────────────────────────────────────────
 
 def create_user(username, password_hash, role="user"):
-    engine = get_engine()
-    with engine.connect() as conn:
+    conn = get_connection()
+    result = conn.execute(text("SELECT COUNT(*) FROM users"))
+    count = result.fetchone()[0]
+    if count == 0:
+        role = "superuser"
+    try:
+        now = datetime.now(TIMEZONE).strftime("%Y-%m-%d %H:%M:%S")
         result = conn.execute(
             text(
-                "SELECT COUNT(*) FROM users"
+                "INSERT INTO users (username, password_hash, role, created_at) VALUES (:u, :p, :r, :c)"
             ),
+            {"u": username, "p": password_hash, "r": role, "c": now},
         )
-        count = result.fetchone()[0]
-        if count == 0:
-            role = "superuser"
-        try:
-            now = datetime.now(TIMEZONE).strftime("%Y-%m-%d %H:%M:%S")
-            result = conn.execute(
-                text(
-                    "INSERT INTO users (username, password_hash, role, created_at) VALUES (:u, :p, :r, :c)"
-                ),
-                {"u": username, "p": password_hash, "r": role, "c": now},
-            )
-            conn.commit()
-            if _is_postgres():
-                result = conn.execute(text("SELECT LASTVAL()"))
-                return result.fetchone()[0]
-            return result.lastrowid
-        except Exception:
-            return None
+        conn.commit()
+        if _is_postgres():
+            result = conn.execute(text("SELECT LASTVAL()"))
+            return result.fetchone()[0]
+        return result.lastrowid
+    except Exception:
+        return None
 
 
 def get_user_by_username(username):
-    engine = get_engine()
-    with engine.connect() as conn:
-        result = conn.execute(
-            text("SELECT * FROM users WHERE username = :u"), {"u": username}
-        )
-        row = result.fetchone()
-        return dict(row._mapping) if row else None
+    conn = get_connection()
+    result = conn.execute(
+        text("SELECT * FROM users WHERE username = :u"), {"u": username}
+    )
+    row = result.fetchone()
+    return dict(row._mapping) if row else None
 
 
 def get_user_by_id(user_id):
-    engine = get_engine()
-    with engine.connect() as conn:
-        result = conn.execute(
-            text("SELECT * FROM users WHERE id = :id"), {"id": user_id}
-        )
-        row = result.fetchone()
-        return dict(row._mapping) if row else None
+    conn = get_connection()
+    result = conn.execute(
+        text("SELECT * FROM users WHERE id = :id"), {"id": user_id}
+    )
+    row = result.fetchone()
+    return dict(row._mapping) if row else None
 
 
 def get_all_users():
-    engine = get_engine()
-    with engine.connect() as conn:
-        result = conn.execute(
-            text("""
-                SELECT u.*, COUNT(e.id) as expense_count
-                FROM users u
-                LEFT JOIN expenses e ON e.user_id = u.id
-                GROUP BY u.id
-                ORDER BY u.created_at DESC
-            """)
-        )
-        return [dict(row._mapping) for row in result]
+    conn = get_connection()
+    result = conn.execute(
+        text("""
+            SELECT u.*, COUNT(e.id) as expense_count
+            FROM users u
+            LEFT JOIN expenses e ON e.user_id = u.id
+            GROUP BY u.id
+            ORDER BY u.created_at DESC
+        """)
+    )
+    return [dict(row._mapping) for row in result]
 
 
 def update_user_role(user_id, new_role):
-    engine = get_engine()
-    with engine.connect() as conn:
-        conn.execute(
-            text("UPDATE users SET role = :r WHERE id = :id"),
-            {"r": new_role, "id": user_id},
-        )
-        conn.commit()
+    conn = get_connection()
+    conn.execute(
+        text("UPDATE users SET role = :r WHERE id = :id"),
+        {"r": new_role, "id": user_id},
+    )
+    conn.commit()
 
 
 def delete_user(user_id):
-    engine = get_engine()
-    with engine.connect() as conn:
-        conn.execute(text("DELETE FROM expenses WHERE user_id = :id"), {"id": user_id})
-        conn.execute(text("DELETE FROM password_resets WHERE user_id = :id"), {"id": user_id})
-        conn.execute(text("DELETE FROM users WHERE id = :id"), {"id": user_id})
-        conn.commit()
+    conn = get_connection()
+    conn.execute(text("DELETE FROM expenses WHERE user_id = :id"), {"id": user_id})
+    conn.execute(text("DELETE FROM password_resets WHERE user_id = :id"), {"id": user_id})
+    conn.execute(text("DELETE FROM users WHERE id = :id"), {"id": user_id})
+    conn.commit()
 
 
 def get_user_expense_stats(user_id):
-    engine = get_engine()
-    with engine.connect() as conn:
-        user = conn.execute(
-            text("SELECT username, role, created_at FROM users WHERE id = :id"),
-            {"id": user_id},
-        ).fetchone()
-        if not user:
-            return None
-        result = conn.execute(
-            text("""
-                SELECT COUNT(*) as total_count, COALESCE(SUM(amount), 0) as total_amount
-                FROM expenses WHERE user_id = :id
-            """),
-            {"id": user_id},
-        ).fetchone()
-        stats = dict(result._mapping)
-        stats["username"] = user[0]
-        stats["role"] = user[1]
-        stats["member_since"] = user[2]
-        return stats
+    conn = get_connection()
+    user = conn.execute(
+        text("SELECT username, role, created_at FROM users WHERE id = :id"),
+        {"id": user_id},
+    ).fetchone()
+    if not user:
+        return None
+    result = conn.execute(
+        text("""
+            SELECT COUNT(*) as total_count, COALESCE(SUM(amount), 0) as total_amount
+            FROM expenses WHERE user_id = :id
+        """),
+        {"id": user_id},
+    ).fetchone()
+    stats = dict(result._mapping)
+    stats["username"] = user[0]
+    stats["role"] = user[1]
+    stats["member_since"] = user[2]
+    return stats
 
 
 # ── Password reset functions ────────────────────────────────
 
 def create_reset_token(user_id):
-    engine = get_engine()
+    conn = get_connection()
     token = secrets.token_urlsafe(32)
     now = datetime.now(TIMEZONE).strftime("%Y-%m-%d %H:%M:%S")
     expires_at = (datetime.now(TIMEZONE) + timedelta(hours=1)).strftime(
         "%Y-%m-%d %H:%M:%S"
     )
-    with engine.connect() as conn:
-        conn.execute(
-            text(
-                "INSERT INTO password_resets (user_id, token, expires_at, created_at) VALUES (:uid, :tok, :exp, :c)"
-            ),
-            {"uid": user_id, "tok": token, "exp": expires_at, "c": now},
-        )
-        conn.commit()
+    conn.execute(
+        text(
+            "INSERT INTO password_resets (user_id, token, expires_at, created_at) VALUES (:uid, :tok, :exp, :c)"
+        ),
+        {"uid": user_id, "tok": token, "exp": expires_at, "c": now},
+    )
+    conn.commit()
     return token
 
 
 def validate_reset_token(token):
-    engine = get_engine()
+    conn = get_connection()
     now_dhaka = datetime.now(TIMEZONE).strftime("%Y-%m-%d %H:%M:%S")
-    with engine.connect() as conn:
-        result = conn.execute(
-            text("""
-                SELECT * FROM password_resets
-                WHERE token = :tok AND used = 0
-            """),
-            {"tok": token},
-        )
-        row = result.fetchone()
-        if not row:
-            return None
-        r = dict(row._mapping)
-        if r["expires_at"] <= now_dhaka:
-            return None
-        return r
+    result = conn.execute(
+        text("""
+            SELECT * FROM password_resets
+            WHERE token = :tok AND used = 0
+        """),
+        {"tok": token},
+    )
+    row = result.fetchone()
+    if not row:
+        return None
+    r = dict(row._mapping)
+    if r["expires_at"] <= now_dhaka:
+        return None
+    return r
 
 
 def use_reset_token(token, password_hash):
-    engine = get_engine()
+    conn = get_connection()
     now_dhaka = datetime.now(TIMEZONE).strftime("%Y-%m-%d %H:%M:%S")
-    with engine.connect() as conn:
-        record = conn.execute(
-            text(
-                "SELECT * FROM password_resets WHERE token = :tok AND used = 0"
-            ),
-            {"tok": token},
-        ).fetchone()
-        if not record:
-            return False
-        record = dict(record._mapping)
-        if record["expires_at"] <= now_dhaka:
-            return False
-        conn.execute(
-            text("UPDATE users SET password_hash = :p WHERE id = :id"),
-            {"p": password_hash, "id": record["user_id"]},
-        )
-        conn.execute(
-            text("UPDATE password_resets SET used = 1 WHERE token = :tok"),
-            {"tok": token},
-        )
-        conn.commit()
-        return True
+    record = conn.execute(
+        text(
+            "SELECT * FROM password_resets WHERE token = :tok AND used = 0"
+        ),
+        {"tok": token},
+    ).fetchone()
+    if not record:
+        return False
+    record = dict(record._mapping)
+    if record["expires_at"] <= now_dhaka:
+        return False
+    conn.execute(
+        text("UPDATE users SET password_hash = :p WHERE id = :id"),
+        {"p": password_hash, "id": record["user_id"]},
+    )
+    conn.execute(
+        text("UPDATE password_resets SET used = 1 WHERE token = :tok"),
+        {"tok": token},
+    )
+    conn.commit()
+    return True
 
 
 # ── Expense query helpers ───────────────────────────────────
@@ -385,292 +402,278 @@ def _user_params(user_id):
 # ── Expense functions (modified with optional user_id) ──────
 
 def add_expense(date, description, amount, category, user_id=1):
-    engine = get_engine()
-    with engine.connect() as conn:
-        now = datetime.now(TIMEZONE).strftime("%Y-%m-%d %H:%M:%S")
-        result = conn.execute(
-            text("""
-                INSERT INTO expenses (date, description, amount, category, user_id, created_at)
-                VALUES (:date, :description, :amount, :category, :user_id, :created_at)
-            """),
-            {
-                "date": date,
-                "description": description,
-                "amount": amount,
-                "category": category,
-                "user_id": user_id,
-                "created_at": now,
-            },
-        )
-        if _is_postgres():
-            result = conn.execute(text("SELECT LASTVAL()"))
-            expense_id = result.fetchone()[0]
-        else:
-            expense_id = result.lastrowid
-        conn.commit()
-        return expense_id
+    conn = get_connection()
+    now = datetime.now(TIMEZONE).strftime("%Y-%m-%d %H:%M:%S")
+    result = conn.execute(
+        text("""
+            INSERT INTO expenses (date, description, amount, category, user_id, created_at)
+            VALUES (:date, :description, :amount, :category, :user_id, :created_at)
+        """),
+        {
+            "date": date,
+            "description": description,
+            "amount": amount,
+            "category": category,
+            "user_id": user_id,
+            "created_at": now,
+        },
+    )
+    if _is_postgres():
+        result = conn.execute(text("SELECT LASTVAL()"))
+        expense_id = result.fetchone()[0]
+    else:
+        expense_id = result.lastrowid
+    conn.commit()
+    return expense_id
 
 
 def get_expenses_by_date(date, user_id=None):
-    engine = get_engine()
-    with engine.connect() as conn:
-        uf = _user_filter(user_id)
-        params = {"date": date}
-        params.update(_user_params(user_id))
-        result = conn.execute(
-            text(f"SELECT * FROM expenses WHERE date = :date{uf} ORDER BY created_at DESC"),
-            params,
-        )
-        return [dict(row._mapping) for row in result]
+    conn = get_connection()
+    uf = _user_filter(user_id)
+    params = {"date": date}
+    params.update(_user_params(user_id))
+    result = conn.execute(
+        text(f"SELECT * FROM expenses WHERE date = :date{uf} ORDER BY created_at DESC"),
+        params,
+    )
+    return [dict(row._mapping) for row in result]
 
 
 def get_all_expenses(limit=100, user_id=None):
-    engine = get_engine()
-    with engine.connect() as conn:
-        uf = _user_filter(user_id)
-        params = {"limit": limit}
-        params.update(_user_params(user_id))
-        result = conn.execute(
-            text(
-                f"SELECT * FROM expenses ORDER BY date DESC, created_at DESC LIMIT :limit"
-            ),
-            params,
-        )
-        return [dict(row._mapping) for row in result]
+    conn = get_connection()
+    uf = _user_filter(user_id)
+    params = {"limit": limit}
+    params.update(_user_params(user_id))
+    result = conn.execute(
+        text(
+            f"SELECT * FROM expenses ORDER BY date DESC, created_at DESC LIMIT :limit"
+        ),
+        params,
+    )
+    return [dict(row._mapping) for row in result]
 
 
 def get_recent_expenses_paginated(page=1, per_page=20, user_id=None):
-    engine = get_engine()
+    conn = get_connection()
     offset = (page - 1) * per_page
-    with engine.connect() as conn:
-        conditions = []
-        params = {}
+    conditions = []
+    params = {}
 
-        if user_id is not None:
-            conditions.append("user_id = :user_id")
-            params["user_id"] = user_id
+    if user_id is not None:
+        conditions.append("user_id = :user_id")
+        params["user_id"] = user_id
 
-        where_clause = " WHERE " + " AND ".join(conditions) if conditions else ""
+    where_clause = " WHERE " + " AND ".join(conditions) if conditions else ""
 
-        count_result = conn.execute(
-            text(f"SELECT COUNT(*) FROM expenses{where_clause}"),
-            params,
-        )
-        total = count_result.fetchone()[0]
+    count_result = conn.execute(
+        text(f"SELECT COUNT(*) FROM expenses{where_clause}"),
+        params,
+    )
+    total = count_result.fetchone()[0]
 
-        result = conn.execute(
-            text(
-                f"SELECT * FROM expenses{where_clause} ORDER BY date DESC, created_at DESC LIMIT :lim OFFSET :off"
-            ),
-            {**params, "lim": per_page, "off": offset},
-        )
-        expenses = [dict(row._mapping) for row in result]
+    result = conn.execute(
+        text(
+            f"SELECT * FROM expenses{where_clause} ORDER BY date DESC, created_at DESC LIMIT :lim OFFSET :off"
+        ),
+        {**params, "lim": per_page, "off": offset},
+    )
+    expenses = [dict(row._mapping) for row in result]
 
-        return {
-            "expenses": expenses,
-            "total": total,
-            "page": page,
-            "per_page": per_page,
-            "total_pages": max(1, (total + per_page - 1) // per_page),
-        }
+    return {
+        "expenses": expenses,
+        "total": total,
+        "page": page,
+        "per_page": per_page,
+        "total_pages": max(1, (total + per_page - 1) // per_page),
+    }
 
 
 def get_expenses_by_month(year, month, user_id=None):
-    engine = get_engine()
-    with engine.connect() as conn:
-        month_pattern = f"{year}-{month:02d}%"
-        uf = _user_filter(user_id)
-        params = {"pattern": month_pattern}
-        params.update(_user_params(user_id))
-        result = conn.execute(
-            text(
-                f"SELECT * FROM expenses WHERE date LIKE :pattern{uf} ORDER BY date DESC"
-            ),
-            params,
-        )
-        return [dict(row._mapping) for row in result]
+    conn = get_connection()
+    month_pattern = f"{year}-{month:02d}%"
+    uf = _user_filter(user_id)
+    params = {"pattern": month_pattern}
+    params.update(_user_params(user_id))
+    result = conn.execute(
+        text(
+            f"SELECT * FROM expenses WHERE date LIKE :pattern{uf} ORDER BY date DESC"
+        ),
+        params,
+    )
+    return [dict(row._mapping) for row in result]
 
 
 def get_expenses_filtered(year, month, user_id=None, search=None, page=1, per_page=20):
-    engine = get_engine()
+    conn = get_connection()
     offset = (page - 1) * per_page
-    with engine.connect() as conn:
-        month_pattern = f"{year}-{month:02d}%"
-        conditions = ["date LIKE :pattern"]
-        params = {"pattern": month_pattern}
+    month_pattern = f"{year}-{month:02d}%"
+    conditions = ["date LIKE :pattern"]
+    params = {"pattern": month_pattern}
 
-        if user_id is not None:
-            conditions.append("user_id = :user_id")
-            params["user_id"] = user_id
+    if user_id is not None:
+        conditions.append("user_id = :user_id")
+        params["user_id"] = user_id
 
-        if search:
-            conditions.append("description LIKE :search")
-            params["search"] = f"%{search}%"
+    if search:
+        conditions.append("description LIKE :search")
+        params["search"] = f"%{search}%"
 
-        where_clause = " AND ".join(conditions)
+    where_clause = " AND ".join(conditions)
 
-        count_result = conn.execute(
-            text(f"SELECT COUNT(*) FROM expenses WHERE {where_clause}"),
-            params,
-        )
-        total = count_result.fetchone()[0]
+    count_result = conn.execute(
+        text(f"SELECT COUNT(*) FROM expenses WHERE {where_clause}"),
+        params,
+    )
+    total = count_result.fetchone()[0]
 
-        result = conn.execute(
-            text(
-                f"SELECT * FROM expenses WHERE {where_clause} ORDER BY date DESC, created_at DESC LIMIT :lim OFFSET :off"
-            ),
-            {**params, "lim": per_page, "off": offset},
-        )
-        expenses = [dict(row._mapping) for row in result]
+    result = conn.execute(
+        text(
+            f"SELECT * FROM expenses WHERE {where_clause} ORDER BY date DESC, created_at DESC LIMIT :lim OFFSET :off"
+        ),
+        {**params, "lim": per_page, "off": offset},
+    )
+    expenses = [dict(row._mapping) for row in result]
 
-        return {
-            "expenses": expenses,
-            "total": total,
-            "page": page,
-            "per_page": per_page,
-            "total_pages": max(1, (total + per_page - 1) // per_page),
-        }
+    return {
+        "expenses": expenses,
+        "total": total,
+        "page": page,
+        "per_page": per_page,
+        "total_pages": max(1, (total + per_page - 1) // per_page),
+    }
 
 
 def get_expenses_export(year, month, user_id=None, search=None):
-    engine = get_engine()
-    with engine.connect() as conn:
-        month_pattern = f"{year}-{month:02d}%"
-        conditions = ["date LIKE :pattern"]
-        params = {"pattern": month_pattern}
+    conn = get_connection()
+    month_pattern = f"{year}-{month:02d}%"
+    conditions = ["date LIKE :pattern"]
+    params = {"pattern": month_pattern}
 
-        if user_id is not None:
-            conditions.append("user_id = :user_id")
-            params["user_id"] = user_id
+    if user_id is not None:
+        conditions.append("user_id = :user_id")
+        params["user_id"] = user_id
 
-        if search:
-            conditions.append("description LIKE :search")
-            params["search"] = f"%{search}%"
+    if search:
+        conditions.append("description LIKE :search")
+        params["search"] = f"%{search}%"
 
-        where_clause = " AND ".join(conditions)
-        result = conn.execute(
-            text(
-                f"SELECT * FROM expenses WHERE {where_clause} ORDER BY date ASC, created_at ASC"
-            ),
-            params,
-        )
-        return [dict(row._mapping) for row in result]
+    where_clause = " AND ".join(conditions)
+    result = conn.execute(
+        text(
+            f"SELECT * FROM expenses WHERE {where_clause} ORDER BY date ASC, created_at ASC"
+        ),
+        params,
+    )
+    return [dict(row._mapping) for row in result]
 
 
 def get_category_totals_by_month(year, month, user_id=None):
-    engine = get_engine()
-    with engine.connect() as conn:
-        month_pattern = f"{year}-{month:02d}%"
-        uf = _user_filter(user_id)
-        params = {"pattern": month_pattern}
-        params.update(_user_params(user_id))
-        result = conn.execute(
-            text(f"""
-                SELECT category, SUM(amount) as total, COUNT(*) as count
-                FROM expenses
-                WHERE date LIKE :pattern{uf}
-                GROUP BY category
-                ORDER BY total DESC
-            """),
-            params,
-        )
-        return [dict(row._mapping) for row in result]
+    conn = get_connection()
+    month_pattern = f"{year}-{month:02d}%"
+    uf = _user_filter(user_id)
+    params = {"pattern": month_pattern}
+    params.update(_user_params(user_id))
+    result = conn.execute(
+        text(f"""
+            SELECT category, SUM(amount) as total, COUNT(*) as count
+            FROM expenses
+            WHERE date LIKE :pattern{uf}
+            GROUP BY category
+            ORDER BY total DESC
+        """),
+        params,
+    )
+    return [dict(row._mapping) for row in result]
 
 
 def get_monthly_totals(months=6, user_id=None):
-    engine = get_engine()
-    with engine.connect() as conn:
-        uf = _user_filter(user_id)
-        params = {"limit": months}
-        params.update(_user_params(user_id))
+    conn = get_connection()
+    uf = _user_filter(user_id)
+    params = {"limit": months}
+    params.update(_user_params(user_id))
 
-        if _is_postgres():
-            result = conn.execute(
-                text(f"""
-                    SELECT SUBSTR(date::text, 1, 7) as month, SUM(amount) as total
-                    FROM expenses
-                    WHERE 1=1{uf}
-                    GROUP BY SUBSTR(date::text, 1, 7)
-                    ORDER BY month DESC
-                    LIMIT :limit
-                """),
-                params,
-            )
-        else:
-            result = conn.execute(
-                text(f"""
-                    SELECT SUBSTR(date, 1, 7) as month, SUM(amount) as total
-                    FROM expenses
-                    WHERE 1=1{uf}
-                    GROUP BY SUBSTR(date, 1, 7)
-                    ORDER BY month DESC
-                    LIMIT :limit
-                """),
-                params,
-            )
-        return [dict(row._mapping) for row in result]
+    if _is_postgres():
+        result = conn.execute(
+            text(f"""
+                SELECT SUBSTR(date::text, 1, 7) as month, SUM(amount) as total
+                FROM expenses
+                WHERE 1=1{uf}
+                GROUP BY SUBSTR(date::text, 1, 7)
+                ORDER BY month DESC
+                LIMIT :limit
+            """),
+            params,
+        )
+    else:
+        result = conn.execute(
+            text(f"""
+                SELECT SUBSTR(date, 1, 7) as month, SUM(amount) as total
+                FROM expenses
+                WHERE 1=1{uf}
+                GROUP BY SUBSTR(date, 1, 7)
+                ORDER BY month DESC
+                LIMIT :limit
+            """),
+            params,
+        )
+    return [dict(row._mapping) for row in result]
 
 
 def get_today_total(user_id=None):
-    engine = get_engine()
-    with engine.connect() as conn:
-        today = datetime.now(TIMEZONE).strftime("%Y-%m-%d")
-        uf = _user_filter(user_id)
-        params = {"date": today}
-        params.update(_user_params(user_id))
-        result = conn.execute(
-            text(
-                f"SELECT COALESCE(SUM(amount), 0) as total FROM expenses WHERE date = :date{uf}"
-            ),
-            params,
-        )
-        row = result.fetchone()
-        return row[0] if row else 0
+    conn = get_connection()
+    today = datetime.now(TIMEZONE).strftime("%Y-%m-%d")
+    uf = _user_filter(user_id)
+    params = {"date": today}
+    params.update(_user_params(user_id))
+    result = conn.execute(
+        text(
+            f"SELECT COALESCE(SUM(amount), 0) as total FROM expenses WHERE date = :date{uf}"
+        ),
+        params,
+    )
+    row = result.fetchone()
+    return row[0] if row else 0
 
 
 def get_month_total(user_id=None):
-    engine = get_engine()
-    with engine.connect() as conn:
-        month_pattern = datetime.now(TIMEZONE).strftime("%Y-%m") + "%"
-        uf = _user_filter(user_id)
-        params = {"pattern": month_pattern}
-        params.update(_user_params(user_id))
-        result = conn.execute(
-            text(
-                f"SELECT COALESCE(SUM(amount), 0) as total FROM expenses WHERE date LIKE :pattern{uf}"
-            ),
-            params,
-        )
-        row = result.fetchone()
-        return row[0] if row else 0
+    conn = get_connection()
+    month_pattern = datetime.now(TIMEZONE).strftime("%Y-%m") + "%"
+    uf = _user_filter(user_id)
+    params = {"pattern": month_pattern}
+    params.update(_user_params(user_id))
+    result = conn.execute(
+        text(
+            f"SELECT COALESCE(SUM(amount), 0) as total FROM expenses WHERE date LIKE :pattern{uf}"
+        ),
+        params,
+    )
+    row = result.fetchone()
+    return row[0] if row else 0
 
 
 def get_distinct_categories():
-    engine = get_engine()
-    with engine.connect() as conn:
-        result = conn.execute(
-            text("SELECT DISTINCT category FROM expenses ORDER BY category")
-        )
-        return [row[0] for row in result]
+    conn = get_connection()
+    result = conn.execute(
+        text("SELECT DISTINCT category FROM expenses ORDER BY category")
+    )
+    return [row[0] for row in result]
 
 
 def get_distinct_years(user_id=None):
-    engine = get_engine()
-    with engine.connect() as conn:
-        uf = _user_filter(user_id)
-        params = {}
-        params.update(_user_params(user_id))
-        result = conn.execute(
-            text(f"SELECT DISTINCT SUBSTR(date, 1, 4) as year FROM expenses WHERE 1=1{uf} ORDER BY year"),
-            params,
-        )
-        return [int(row[0]) for row in result]
+    conn = get_connection()
+    uf = _user_filter(user_id)
+    params = {}
+    params.update(_user_params(user_id))
+    result = conn.execute(
+        text(f"SELECT DISTINCT SUBSTR(date, 1, 4) as year FROM expenses WHERE 1=1{uf} ORDER BY year"),
+        params,
+    )
+    return [int(row[0]) for row in result]
 
 
 def delete_expense(expense_id):
-    engine = get_engine()
-    with engine.connect() as conn:
-        conn.execute(
-            text("DELETE FROM expenses WHERE id = :id"), {"id": expense_id}
-        )
-        conn.commit()
+    conn = get_connection()
+    conn.execute(
+        text("DELETE FROM expenses WHERE id = :id"), {"id": expense_id}
+    )
+    conn.commit()

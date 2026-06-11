@@ -16,6 +16,19 @@ DATABASE_PATH = os.environ.get(
 
 DATABASE_URL = os.environ.get("DATABASE_URL", "")
 
+# ── Neon/Postgres connection enrichment ──
+def enrich_db_url(url=None):
+    """Auto-append connection params for Neon Postgres (cold-start mitigation)."""
+    if url is None:
+        url = DATABASE_URL
+    if not url or not url.startswith("postgresql"):
+        return url
+    base, frag = (url.split("?", 1) + [""])[:2]
+    params = dict(p.split("=", 1) for p in frag.split("&") if p)
+    params.setdefault("connect_timeout", "10")
+    params.setdefault("sslmode", "require")
+    return base + "?" + "&".join(f"{k}={v}" for k, v in params.items())
+
 CATEGORY_COLORS = {
     "Food": "#10b981",
     "Transport": "#3b82f6",
