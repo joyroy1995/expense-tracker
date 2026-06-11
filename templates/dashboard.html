@@ -24,11 +24,16 @@
     <main class="container">
         <div class="dashboard-header">
             <h1>Dashboard</h1>
-            <div class="month-selector">
-                <select id="monthSelect" onchange="changeMonth()">
+            <div class="date-selector">
+                <select id="yearSelect" onchange="changePeriod()">
+                    {% for y in years %}
+                    <option value="{{ y }}" {% if y == year %}selected{% endif %}>{{ y }}</option>
+                    {% endfor %}
+                </select>
+                <select id="monthSelect" onchange="changePeriod()">
                     {% for m in range(1, 13) %}
-                    <option value="{{ year }}-{{ '%02d'|format(m) }}" {% if m == month %}selected{% endif %}>
-                        {{ ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"][m-1] }} {{ year }}
+                    <option value="{{ m }}" {% if m == month %}selected{% endif %}>
+                        {{ ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][m-1] }}
                     </option>
                     {% endfor %}
                 </select>

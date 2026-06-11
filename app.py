@@ -66,10 +66,13 @@ def dashboard():
     month = request.args.get("month", now.month, type=int)
 
     category_totals = db.get_category_totals_by_month(year, month)
-    monthly_totals = db.get_monthly_totals(months=6)
+    monthly_totals = db.get_monthly_totals(months=12)
     month_expenses = db.get_expenses_by_month(year, month)
 
     month_total = sum(t["total"] for t in category_totals)
+
+    db_years = db.get_distinct_years()
+    years = sorted(set(db_years + [now.year, now.year + 1, now.year + 2, now.year + 3]))
 
     return render_template(
         "dashboard.html",
@@ -79,6 +82,7 @@ def dashboard():
         year=year,
         month=month,
         month_total=month_total,
+        years=years,
         category_colors=CATEGORY_COLORS,
     )
 
@@ -87,6 +91,7 @@ def dashboard():
 @login_required
 def api_add_expense():
     data = request.get_json()
+    date = data.get("date", datetime.now().strftime("%Y-%m-%d"))
     description = data.get("description", "").strip()
 
     if not description:
@@ -99,8 +104,7 @@ def api_add_expense():
     if amount <= 0:
         return jsonify({"error": "Could not extract amount. Please include the amount in your text."}), 400
 
-    today = datetime.now().strftime("%Y-%m-%d")
-    expense_id = db.add_expense(today, description, amount, category)
+    expense_id = db.add_expense(date, description, amount, category)
 
     return jsonify(
         {

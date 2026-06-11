@@ -168,9 +168,9 @@ function showToast(message, type = 'success') {
     }, 3000);
 }
 
-function changeMonth() {
-    const select = document.getElementById('monthSelect');
-    const [year, month] = select.value.split('-');
+function changePeriod() {
+    const year = document.getElementById('yearSelect').value;
+    const month = document.getElementById('monthSelect').value;
     window.location.href = `/dashboard?year=${year}&month=${parseInt(month)}`;
 }
 

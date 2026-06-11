@@ -200,6 +200,15 @@ def get_distinct_categories():
         return [row[0] for row in result]
 
 
+def get_distinct_years():
+    engine = get_engine()
+    with engine.connect() as conn:
+        result = conn.execute(
+            text("SELECT DISTINCT SUBSTR(date, 1, 4) as year FROM expenses ORDER BY year")
+        )
+        return [int(row[0]) for row in result]
+
+
 def delete_expense(expense_id):
     engine = get_engine()
     with engine.connect() as conn:

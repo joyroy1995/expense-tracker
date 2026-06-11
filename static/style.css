@@ -457,7 +457,12 @@ body {
     font-weight: 700;
 }
 
-.month-selector select {
+.date-selector {
+    display: flex;
+    gap: 8px;
+}
+
+.date-selector select {
     padding: 10px 16px;
     border: 1px solid var(--border);
     border-radius: var(--radius-sm);
@@ -465,6 +470,16 @@ body {
     font-family: inherit;
     background: var(--card-bg);
     cursor: pointer;
+}
+
+.form-row {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+}
+
+.form-date input {
+    max-width: 200px;
 }
 
 .dashboard-grid {
