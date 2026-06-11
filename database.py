@@ -578,6 +578,37 @@ def get_expenses_export(year, month, user_id=None, search=None):
     return [dict(row._mapping) for row in result]
 
 
+def get_expenses_by_category_month(year, month, category, user_id=None, page=1, per_page=20):
+    conn = get_connection()
+    month_pattern = f"{year}-{month:02d}%"
+    conditions = ["date LIKE :pattern", "category = :category"]
+    params = {"pattern": month_pattern, "category": category}
+    if user_id is not None:
+        conditions.append("user_id = :user_id")
+        params["user_id"] = user_id
+    where_clause = " AND ".join(conditions)
+
+    count_result = conn.execute(
+        text(f"SELECT COUNT(*) FROM expenses WHERE {where_clause}"), params
+    )
+    total = count_result.fetchone()[0]
+
+    offset = (page - 1) * per_page
+    result = conn.execute(
+        text(f"SELECT * FROM expenses WHERE {where_clause} ORDER BY date ASC, created_at ASC LIMIT :lim OFFSET :off"),
+        {**params, "lim": per_page, "off": offset},
+    )
+    expenses = [dict(row._mapping) for row in result]
+
+    return {
+        "expenses": expenses,
+        "total": total,
+        "page": page,
+        "per_page": per_page,
+        "total_pages": max(1, (total + per_page - 1) // per_page),
+    }
+
+
 def get_category_totals_by_month(year, month, user_id=None):
     conn = get_connection()
     month_pattern = f"{year}-{month:02d}%"

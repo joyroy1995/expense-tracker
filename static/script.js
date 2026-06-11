@@ -615,9 +615,11 @@ async function renderDashboard(params) {
   const year = parseInt(params.year) || now.getFullYear();
   const month = parseInt(params.month) || now.getMonth() + 1;
   const page = parseInt(params.page) || 1;
+  const category = params.category || '';
   const qs = `year=${year}&month=${month}&page=${page}` +
     (params.search ? `&search=${encodeURIComponent(params.search)}` : '') +
-    (params.user_id ? `&user_id=${params.user_id}` : '');
+    (params.user_id ? `&user_id=${params.user_id}` : '') +
+    (category ? `&category=${encodeURIComponent(category)}` : '');
 
   const res = await api.get(`/api/dashboard?${qs}`);
   if (!res.ok) { handleAuthError(res); return; }
@@ -630,7 +632,8 @@ async function renderDashboard(params) {
   let catRows = d.category_totals.map(c => {
     const pct = d.month_total > 0 ? (c.total / d.month_total * 100) : 0;
     const color = d.category_colors[c.category] || '#6b7280';
-    return `<tr>
+    const isActive = category === c.category;
+    return `<tr class="category-row${isActive ? ' category-active' : ''}" onclick="selectCategory('${esc(c.category)}')">
       <td><span class="category-dot" style="background:${color}"></span>${esc(c.category)}</td>
       <td>৳${Number(c.total).toFixed(2)}</td>
       <td>${c.count}</td>
@@ -659,6 +662,36 @@ async function renderDashboard(params) {
           <option value="">All Users</option>
           ${opts}
         </select>
+      </div>`;
+  }
+
+  let catFilterHtml = '';
+  let catExpBody = '';
+  let catTotal = 0;
+  let catPage = 1;
+  let catTotalPages = 1;
+  let catPagination = '';
+
+  if (category) {
+    const catRes = await api.get(`/api/expenses/category-breakdown?year=${year}&month=${month}&category=${encodeURIComponent(category)}&page=${page}${params.user_id ? `&user_id=${params.user_id}` : ''}`);
+    if (catRes.ok) {
+      const cd = catRes.data;
+      catExpBody = cd.expenses.length
+        ? makeDateGroups(cd.expenses)
+        : '<div class="empty-state"><p>No expenses for this category</p></div>';
+      catTotal = cd.total;
+      catPage = cd.page;
+      catTotalPages = cd.total_pages;
+      const catPagBase = `/dashboard?year=${year}&month=${month}&category=${encodeURIComponent(category)}${params.user_id ? `&user_id=${params.user_id}` : ''}&`;
+      catPagination = makePagination(catPagBase, cd.page, cd.total_pages);
+    }
+    catFilterHtml = `
+      <div class="category-filter-bar">
+        <span class="category-filter-label">
+          <span class="category-dot" style="background:${d.category_colors[category] || '#6b7280'}"></span>
+          ${esc(category)}
+        </span>
+        <a href="/dashboard?year=${year}&month=${month}${params.user_id ? `&user_id=${params.user_id}` : ''}" data-link class="btn btn-small btn-outline category-filter-clear">&times; Clear</a>
       </div>`;
   }
 
@@ -728,11 +761,12 @@ async function renderDashboard(params) {
 
     <div class="card">
       <div class="card-header-row">
-        <h2 class="card-title" style="margin-bottom:0;">Expenses for ${monthNames[month-1]} ${year}</h2>
-        <span class="expense-count">${d.total} expense(s)</span>
+        <h2 class="card-title" style="margin-bottom:0;">${category ? `${esc(category)} expenses for ${monthNames[month-1]} ${year}` : `Expenses for ${monthNames[month-1]} ${year}`}</h2>
+        <span class="expense-count">${category ? catTotal : d.total} expense(s)</span>
       </div>
-      <div class="expense-list">${expBody}</div>
-      ${makePagination(pagBase, d.page, d.total_pages)}
+      ${catFilterHtml}
+      <div class="expense-list">${category ? catExpBody : expBody}</div>
+      ${category ? catPagination : makePagination(pagBase, d.page, d.total_pages)}
     </div>`;
 
   initCharts(d.category_totals, d.monthly_totals, d.category_colors);
@@ -755,6 +789,17 @@ function changePeriod() {
   const uf = document.getElementById('userFilter');
   if (uf && uf.value) url += `&user_id=${uf.value}`;
   navigate(url);
+}
+
+function selectCategory(category) {
+  const p = new URLSearchParams(window.location.search);
+  if (category === p.get('category')) {
+    p.delete('category');
+  } else {
+    p.set('category', category);
+  }
+  p.delete('page');
+  navigate('/dashboard?' + p.toString());
 }
 
 function initCharts(categoryTotals, monthlyTotals, colors) {

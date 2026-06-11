@@ -409,6 +409,25 @@ def api_category_totals():
     return jsonify(db.get_category_totals_by_month(year, month, user_id=uid))
 
 
+@app.route("/api/expenses/category-breakdown")
+@login_required
+def api_category_breakdown():
+    uid = session["user_id"]
+    is_super = session.get("role") == "superuser"
+    year = request.args.get("year", type=int)
+    month = request.args.get("month", type=int)
+    category = request.args.get("category", "").strip()
+    page = request.args.get("page", 1, type=int)
+    if not year or not month or not category:
+        return jsonify({"error": "year, month, and category required"}), 400
+    filter_user_id = request.args.get("user_id", type=int)
+    effective_user_id = filter_user_id if is_super else uid
+    data = db.get_expenses_by_category_month(year, month, category, user_id=effective_user_id, page=page)
+    for exp in data["expenses"]:
+        exp["color"] = CATEGORY_COLORS.get(exp["category"], "#6b7280")
+    return jsonify(data)
+
+
 # ── Export routes ────────────────────────────────────────────
 
 @app.route("/api/export/<fmt>")
