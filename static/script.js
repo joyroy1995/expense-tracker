@@ -77,6 +77,7 @@ window.addEventListener('popstate', renderRoute);
 function setLayout(type) {
   const sidebar = document.getElementById('sidebar');
   const menuToggle = document.getElementById('menuToggle');
+  const topbar = document.getElementById('topbar');
   const app = document.getElementById('app');
   const adminLink = document.getElementById('adminLink');
 
@@ -85,12 +86,14 @@ function setLayout(type) {
     document.body.classList.remove('sidebar-open', 'sidebar-collapsed');
     if (sidebar) sidebar.style.display = 'none';
     if (menuToggle) menuToggle.style.display = 'none';
+    if (topbar) topbar.style.display = 'none';
     app.className = 'login-container';
   } else {
     document.body.className = '';
     document.body.classList.remove('sidebar-open');
     if (sidebar) sidebar.style.display = '';
     if (menuToggle) menuToggle.style.display = '';
+    if (topbar) topbar.style.display = '';
     app.className = 'container';
     if (adminLink) {
       adminLink.style.display = currentUser?.role === 'superuser' ? '' : 'none';
