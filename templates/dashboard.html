@@ -17,6 +17,10 @@
         <div class="nav-links">
             <a href="/" class="nav-link">Home</a>
             <a href="/dashboard" class="nav-link active">Dashboard</a>
+            <a href="/profile" class="nav-link">Profile</a>
+            {% if role == 'superuser' %}
+            <a href="/admin/users" class="nav-link">Admin</a>
+            {% endif %}
             <a href="/logout" class="nav-link nav-logout">Logout</a>
         </div>
     </nav>
@@ -24,25 +28,64 @@
     <main class="container">
         <div class="dashboard-header">
             <h1>Dashboard</h1>
-            <div class="date-selector">
-                <select id="yearSelect" onchange="changePeriod()">
-                    {% for y in years %}
-                    <option value="{{ y }}" {% if y == year %}selected{% endif %}>{{ y }}</option>
-                    {% endfor %}
-                </select>
-                <select id="monthSelect" onchange="changePeriod()">
-                    {% for m in range(1, 13) %}
-                    <option value="{{ m }}" {% if m == month %}selected{% endif %}>
-                        {{ ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][m-1] }}
-                    </option>
-                    {% endfor %}
-                </select>
+            <div class="dashboard-controls">
+                <div class="date-selector">
+                    <select id="yearSelect" onchange="changePeriod()">
+                        {% for y in years %}
+                        <option value="{{ y }}" {% if y == year %}selected{% endif %}>{{ y }}</option>
+                        {% endfor %}
+                    </select>
+                    <select id="monthSelect" onchange="changePeriod()">
+                        {% for m in range(1, 13) %}
+                        <option value="{{ m }}" {% if m == month %}selected{% endif %}>
+                            {{ ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][m-1] }}
+                        </option>
+                        {% endfor %}
+                    </select>
+                </div>
+                {% if role == 'superuser' and users_list %}
+                <div class="user-filter">
+                    <select id="userFilter" onchange="changePeriod()">
+                        <option value="">All Users</option>
+                        {% for u in users_list %}
+                        <option value="{{ u.id }}" {% if filter_user_id == u.id %}selected{% endif %}>{{ u.username }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                {% endif %}
             </div>
         </div>
 
-        <div class="stat-card stat-card-large">
-            <div class="stat-label">Total for {{ ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"][month-1] }} {{ year }}</div>
-            <div class="stat-value">৳{{ "%.2f"|format(month_total) }}</div>
+        <div class="dashboard-toolbar">
+            <div class="stat-card stat-card-large" style="margin-bottom:0;">
+                <div class="stat-label">Total for {{ ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"][month-1] }} {{ year }}</div>
+                <div class="stat-value">৳{{ "%.2f"|format(month_total) }}</div>
+            </div>
+            <form method="GET" class="search-form" id="searchForm">
+                <input type="hidden" name="year" value="{{ year }}">
+                <input type="hidden" name="month" value="{{ month }}">
+                {% if filter_user_id %}
+                <input type="hidden" name="user_id" value="{{ filter_user_id }}">
+                {% endif %}
+                <div class="search-bar">
+                    <input type="text" name="search" placeholder="Search expenses..." value="{{ search_query }}" class="search-input">
+                    <button type="submit" class="btn btn-primary btn-search">Search</button>
+                    {% if search_query %}
+                    <a href="?year={{ year }}&month={{ month }}{% if filter_user_id %}&user_id={{ filter_user_id }}{% endif %}" class="btn btn-outline btn-clear">Clear</a>
+                    {% endif %}
+                </div>
+            </form>
+            <div class="export-buttons">
+                <a href="/api/export/csv?year={{ year }}&month={{ month }}{% if filter_user_id %}&user_id={{ filter_user_id }}{% endif %}{% if search_query %}&search={{ search_query }}{% endif %}" class="btn-export" title="Export as CSV">
+                    <span class="export-icon">📄</span> CSV
+                </a>
+                <a href="/api/export/xlsx?year={{ year }}&month={{ month }}{% if filter_user_id %}&user_id={{ filter_user_id }}{% endif %}{% if search_query %}&search={{ search_query }}{% endif %}" class="btn-export" title="Export as Excel">
+                    <span class="export-icon">📊</span> Excel
+                </a>
+                <a href="/api/export/pdf?year={{ year }}&month={{ month }}{% if filter_user_id %}&user_id={{ filter_user_id }}{% endif %}{% if search_query %}&search={{ search_query }}{% endif %}" class="btn-export" title="Export as PDF">
+                    <span class="export-icon">📕</span> PDF
+                </a>
+            </div>
         </div>
 
         <div class="dashboard-grid">
@@ -92,7 +135,7 @@
                         {% endfor %}
                         {% if not category_totals %}
                         <tr>
-                            <td colspan="4" class="empty-state">No data for this month</td>
+                            <td colspan="4" class="empty-state">No data for this period</td>
                         </tr>
                         {% endif %}
                     </tbody>
@@ -101,7 +144,10 @@
         </div>
 
         <div class="card">
-            <h2 class="card-title">Expenses for {{ ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"][month-1] }} {{ year }}</h2>
+            <div class="card-header-row">
+                <h2 class="card-title" style="margin-bottom:0;">Expenses for {{ ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"][month-1] }} {{ year }}</h2>
+                <span class="expense-count">{{ total }} expense(s)</span>
+            </div>
             <div class="expense-list">
                 {% if month_expenses %}
                     {% set current_date = namespace(value='') %}
@@ -130,10 +176,30 @@
                     </div>
                 {% else %}
                     <div class="empty-state">
-                        <p>No expenses for this month</p>
+                        <p>No expenses for this period</p>
                     </div>
                 {% endif %}
             </div>
+
+            {% if total_pages > 1 %}
+            <div class="pagination">
+                {% if page > 1 %}
+                <a href="?year={{ year }}&month={{ month }}&page={{ page - 1 }}&search={{ search_query }}{% if filter_user_id %}&user_id={{ filter_user_id }}{% endif %}" class="page-link">&laquo; Prev</a>
+                {% endif %}
+                {% for p in range(1, total_pages + 1) %}
+                    {% if p == page %}
+                    <span class="page-link page-current">{{ p }}</span>
+                    {% elif p <= 3 or p > total_pages - 3 or (p >= page - 1 and p <= page + 1) %}
+                    <a href="?year={{ year }}&month={{ month }}&page={{ p }}&search={{ search_query }}{% if filter_user_id %}&user_id={{ filter_user_id }}{% endif %}" class="page-link">{{ p }}</a>
+                    {% elif p == 4 and page > 5 or p == total_pages - 3 and page < total_pages - 4 %}
+                    <span class="page-dots">...</span>
+                    {% endif %}
+                {% endfor %}
+                {% if page < total_pages %}
+                <a href="?year={{ year }}&month={{ month }}&page={{ page + 1 }}&search={{ search_query }}{% if filter_user_id %}&user_id={{ filter_user_id }}{% endif %}" class="page-link">Next &raquo;</a>
+                {% endif %}
+            </div>
+            {% endif %}
         </div>
     </main>
 

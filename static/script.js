@@ -222,7 +222,12 @@ function showToast(message, type = 'success') {
 function changePeriod() {
     const year = document.getElementById('yearSelect').value;
     const month = document.getElementById('monthSelect').value;
-    window.location.href = `/dashboard?year=${year}&month=${parseInt(month)}`;
+    let url = `/dashboard?year=${year}&month=${parseInt(month)}`;
+    const userFilter = document.getElementById('userFilter');
+    if (userFilter && userFilter.value) {
+        url += `&user_id=${userFilter.value}`;
+    }
+    window.location.href = url;
 }
 
 if (typeof categoryTotals !== 'undefined' && typeof categoryColors !== 'undefined') {

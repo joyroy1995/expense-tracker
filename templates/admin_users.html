@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Admin - Users - Expense Tracker</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <nav class="navbar">
+        <div class="nav-brand">
+            <span class="logo-icon">৳</span>
+            <span>Expense Tracker</span>
+        </div>
+        <div class="nav-links">
+            <a href="/" class="nav-link">Home</a>
+            <a href="/dashboard" class="nav-link">Dashboard</a>
+            <a href="/profile" class="nav-link">Profile</a>
+            <a href="/admin/users" class="nav-link active">Admin</a>
+            <a href="/logout" class="nav-link nav-logout">Logout</a>
+        </div>
+    </nav>
+
+    <main class="container">
+        <div class="dashboard-header">
+            <h1>User Management</h1>
+        </div>
+
+        <div class="card">
+            <div class="table-container">
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th>ID</th>
+                            <th>Username</th>
+                            <th>Role</th>
+                            <th>Registered</th>
+                            <th>Expenses</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for u in users %}
+                        <tr>
+                            <td>{{ u.id }}</td>
+                            <td>
+                                <span class="user-name">{{ u.username }}</span>
+                                {% if u.id == session['user_id'] %}
+                                <span class="you-badge">(you)</span>
+                                {% endif %}
+                            </td>
+                            <td>
+                                <span class="role-badge {% if u.role == 'superuser' %}role-superuser{% endif %}">
+                                    {{ u.role }}
+                                </span>
+                            </td>
+                            <td>{{ u.created_at }}</td>
+                            <td>{{ u.expense_count }}</td>
+                            <td class="actions-cell">
+                                {% if u.id != session['user_id'] %}
+                                <form method="POST" action="{{ url_for('admin_change_role', user_id=u.id) }}" style="display:inline">
+                                    <button type="submit" class="btn btn-small btn-outline">
+                                        {% if u.role == 'superuser' %}Demote{% else %}Promote{% endif %}
+                                    </button>
+                                </form>
+                                <form method="POST" action="{{ url_for('admin_delete_user', user_id=u.id) }}" style="display:inline" onsubmit="return confirm('Delete user {{ u.username }} and all their expenses?')">
+                                    <button type="submit" class="btn btn-small btn-danger">Delete</button>
+                                </form>
+                                {% else %}
+                                <span class="text-muted">—</span>
+                                {% endif %}
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </main>
+</body>
+</html>
