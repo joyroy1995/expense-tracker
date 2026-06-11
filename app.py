@@ -109,7 +109,7 @@ def api_add_expense():
     return jsonify(
         {
             "id": expense_id,
-            "date": today,
+            "date": date,
             "description": description,
             "amount": amount,
             "category": category,
@@ -153,6 +153,34 @@ def api_expenses_by_date(date):
     for exp in expenses:
         exp["color"] = CATEGORY_COLORS.get(exp["category"], "#6b7280")
     return jsonify(expenses)
+
+
+@app.route("/api/expenses/month")
+@login_required
+def api_expenses_by_month():
+    now = datetime.now()
+    year = request.args.get("year", now.year, type=int)
+    month = request.args.get("month", now.month, type=int)
+    expenses = db.get_expenses_by_month(year, month)
+    for exp in expenses:
+        exp["color"] = CATEGORY_COLORS.get(exp["category"], "#6b7280")
+    return jsonify(expenses)
+
+
+@app.route("/api/expenses/monthly-totals")
+@login_required
+def api_monthly_totals():
+    months = request.args.get("months", 6, type=int)
+    return jsonify(db.get_monthly_totals(months=months))
+
+
+@app.route("/api/expenses/category-totals")
+@login_required
+def api_category_totals():
+    now = datetime.now()
+    year = request.args.get("year", now.year, type=int)
+    month = request.args.get("month", now.month, type=int)
+    return jsonify(db.get_category_totals_by_month(year, month))
 
 
 if __name__ == "__main__":
