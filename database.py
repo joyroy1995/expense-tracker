@@ -157,6 +157,32 @@ def _init_schema(conn):
         conn.execute(
             text("CREATE INDEX IF NOT EXISTS idx_expenses_user_date ON expenses(user_id, date)")  # sqlite
         )
+        conn.execute(
+            text("""
+            CREATE TABLE IF NOT EXISTS learned_categories (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER,
+                keyword TEXT NOT NULL,
+                category TEXT NOT NULL,
+                learned_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(user_id, keyword),
+                FOREIGN KEY (user_id) REFERENCES users(id)
+            )
+        """)
+        )
+    else:
+        conn.execute(
+            text("""
+            CREATE TABLE IF NOT EXISTS learned_categories (
+                id SERIAL PRIMARY KEY,
+                user_id INTEGER REFERENCES users(id),
+                keyword TEXT NOT NULL,
+                category TEXT NOT NULL,
+                learned_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(user_id, keyword)
+            )
+        """)
+        )
     conn.execute(
         text("""
             CREATE TABLE IF NOT EXISTS migrations (
@@ -719,3 +745,32 @@ def delete_expense(expense_id):
         text("DELETE FROM expenses WHERE id = :id"), {"id": expense_id}
     )
     conn.commit()
+
+
+# ── Learned categories ────────────────────────────────────────
+
+def learn_category(user_id, keyword, category):
+    conn = get_connection()
+    now = datetime.now(TIMEZONE).strftime("%Y-%m-%d %H:%M:%S")
+    conn.execute(
+        text("""
+            INSERT INTO learned_categories (user_id, keyword, category, learned_at)
+            VALUES (:uid, :kw, :cat, :now)
+            ON CONFLICT(user_id, keyword) DO UPDATE SET category = :cat2, learned_at = :now2
+        """),
+        {"uid": user_id, "kw": keyword, "cat": category, "now": now,
+         "cat2": category, "now2": now},
+    )
+    conn.commit()
+
+
+def get_learned_categories(user_id):
+    conn = get_connection()
+    rows = conn.execute(
+        text("""
+            SELECT keyword, category FROM learned_categories
+            WHERE user_id = :uid OR user_id IS NULL
+        """),
+        {"uid": user_id},
+    ).fetchall()
+    return {row[0]: row[1] for row in rows}

@@ -563,7 +563,11 @@ function attachExpenseForm(today) {
       description: input.value,
     };
     const pv = getPreviewValues();
-    if (pv) { fd.category = pv.category; fd.amount = pv.amount; }
+    if (pv) {
+      fd.category = pv.category;
+      fd.amount = pv.amount;
+      if (userModifiedPreview) fd.learn = true;
+    }
 
     const res = await api.post('/api/add_expense', fd);
     btn.disabled = false;

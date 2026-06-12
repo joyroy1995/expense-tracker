@@ -1,7 +1,7 @@
 import google.generativeai as genai
 import json
 import re
-from config import GEMINI_API_KEY
+from config import GEMINI_API_KEY, SEED_CATEGORIES
 
 genai.configure(api_key=GEMINI_API_KEY)
 
@@ -148,7 +148,28 @@ def keyword_category(description):
     return "Other"
 
 
-def extract_expense(description):
+def extract_keywords(description):
+    words = re.sub(r'[^\w\s]', '', description.lower()).split()
+    return [w for w in words if len(w) >= 2]
+
+
+def check_learned(description, learned_dict=None):
+    keywords = extract_keywords(description)
+    combined = dict(SEED_CATEGORIES)
+    if learned_dict:
+        combined.update(learned_dict)
+    for kw in keywords:
+        if kw in combined:
+            return combined[kw]
+    return None
+
+
+def extract_expense(description, learned_categories=None):
+    learned_cat = check_learned(description, learned_categories)
+    if learned_cat:
+        amount = extract_amount_fallback(description) or 0
+        return {"category": learned_cat, "amount": amount}
+
     if not GEMINI_API_KEY:
         return {"category": keyword_category(description), "amount": extract_amount_fallback(description) or 0}
 
@@ -184,7 +205,11 @@ def extract_expense(description):
         return {"category": category, "amount": amount or 0}
 
 
-def predict_expense(description):
+def predict_expense(description, learned_categories=None):
     if not description or len(description) < 2:
         return None
-    return extract_expense(description)
+    learned_cat = check_learned(description, learned_categories)
+    if learned_cat:
+        amount = extract_amount_fallback(description) or 0
+        return {"category": learned_cat, "amount": amount}
+    return extract_expense(description, learned_categories)

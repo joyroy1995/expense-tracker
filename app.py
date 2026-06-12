@@ -3,8 +3,8 @@ from functools import wraps
 from datetime import datetime
 from werkzeug.security import generate_password_hash, check_password_hash
 import database as db
-from llm_service import extract_expense, predict_expense
-from config import USERNAME, PASSWORD, SECRET_KEY, CATEGORY_COLORS, TIMEZONE
+from llm_service import extract_expense, predict_expense, extract_keywords
+from config import USERNAME, PASSWORD, SECRET_KEY, CATEGORY_COLORS, TIMEZONE, SEED_CATEGORIES
 
 app = Flask(__name__)
 app.secret_key = SECRET_KEY
@@ -301,6 +301,21 @@ def api_admin_delete_user(user_id):
     return jsonify({"success": True})
 
 
+# ── API: Learn ──────────────────────────────────────────────
+
+@app.route("/api/learn", methods=["POST"])
+@login_required
+def api_learn():
+    data = request.get_json()
+    description = data.get("description", "").strip()
+    category = data.get("category", "").strip()
+    if not description or not category:
+        return jsonify({"error": "description and category required"}), 400
+    for kw in extract_keywords(description):
+        db.learn_category(session["user_id"], kw, category)
+    return jsonify({"success": True})
+
+
 # ── Existing API routes (unchanged) ────────────────────────
 
 @app.route("/api/add_expense", methods=["POST"])
@@ -326,6 +341,11 @@ def api_add_expense():
     if amount <= 0:
         return jsonify({"error": "Could not extract amount. Please include the amount in your text."}), 400
 
+    # Learn from user-corrected predictions
+    if data.get("learn"):
+        for kw in extract_keywords(description):
+            db.learn_category(session["user_id"], kw, category)
+
     expense_id = db.add_expense(date, description, amount, category, user_id=session["user_id"])
 
     return jsonify(
@@ -349,7 +369,8 @@ def api_predict_expense():
     if len(description) < 2:
         return jsonify({"category": None, "amount": None})
 
-    result = predict_expense(description)
+    learned = db.get_learned_categories(session["user_id"])
+    result = predict_expense(description, learned_categories=learned)
     if result:
         return jsonify(
             {
