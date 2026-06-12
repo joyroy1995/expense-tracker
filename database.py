@@ -100,6 +100,18 @@ def _init_schema(conn):
         conn.execute(
             text("CREATE INDEX IF NOT EXISTS idx_expenses_user_date ON expenses(user_id, date)")
         )
+        conn.execute(
+            text("""
+            CREATE TABLE IF NOT EXISTS learned_categories (
+                id SERIAL PRIMARY KEY,
+                user_id INTEGER REFERENCES users(id),
+                keyword TEXT NOT NULL,
+                category TEXT NOT NULL,
+                learned_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(user_id, keyword)
+            )
+        """)
+        )
     else:
         conn.execute(
             text("""
@@ -167,19 +179,6 @@ def _init_schema(conn):
                 learned_at TEXT DEFAULT CURRENT_TIMESTAMP,
                 UNIQUE(user_id, keyword),
                 FOREIGN KEY (user_id) REFERENCES users(id)
-            )
-        """)
-        )
-    else:
-        conn.execute(
-            text("""
-            CREATE TABLE IF NOT EXISTS learned_categories (
-                id SERIAL PRIMARY KEY,
-                user_id INTEGER REFERENCES users(id),
-                keyword TEXT NOT NULL,
-                category TEXT NOT NULL,
-                learned_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                UNIQUE(user_id, keyword)
             )
         """)
         )
