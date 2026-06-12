@@ -31,6 +31,7 @@ def enrich_db_url(url=None):
 
 CATEGORY_COLORS = {
     "Food": "#10b981",
+    "Dining Out": "#f43f5e",
     "Transport": "#3b82f6",
     "Shopping": "#ec4899",
     "Bills": "#f59e0b",
@@ -38,6 +39,7 @@ CATEGORY_COLORS = {
     "Health": "#ef4444",
     "Education": "#06b6d4",
     "Rent": "#6366f1",
+    "Fruits": "#fb923c",
     "Groceries": "#84cc16",
     "Travel": "#f97316",
     "Personal Care": "#d946ef",
