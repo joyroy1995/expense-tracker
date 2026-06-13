@@ -219,75 +219,6 @@ def extract_expense(description, learned_categories=None):
         return {"category": category, "amount": amount or 0}
 
 
-MONTH_NAMES = [
-    "January", "February", "March", "April", "May", "June",
-    "July", "August", "September", "October", "November", "December",
-]
-
-
-def generate_monthly_summary(year, month, total, prev_total, categories, prev_categories):
-    if not _has_api_key():
-        return None
-
-    month_name = MONTH_NAMES[month - 1]
-    prev_month = month - 1 or 12
-    prev_year = year if month > 1 else year - 1
-    prev_month_name = MONTH_NAMES[prev_month - 1]
-
-    cat_lines = "\n".join(
-        f"- {c['category']}: ৳{c['total']:.0f} ({c['count']} transactions)"
-        for c in categories
-    ) if categories else "No expenses recorded."
-
-    prev_cat_lines = "\n".join(
-        f"- {c['category']}: ৳{c['total']:.0f} ({c['count']} transactions)"
-        for c in prev_categories
-    ) if prev_categories else "No expenses recorded."
-
-    pct_change = ((total - prev_total) / prev_total * 100) if prev_total else 0
-    direction = "increase" if pct_change > 0 else "decrease" if pct_change < 0 else "no change"
-
-    prompt = f"""You are a friendly Bangladeshi personal finance assistant.
-
-Generate a concise 3-4 paragraph monthly spending summary in English based on the data below. Keep it casual and helpful. Focus on insights, not just numbers.
-
-Current month: {month_name} {year}
-Total spent: ৳{total:.0f}
-
-Category breakdown:
-{cat_lines}
-
-Previous month: {prev_month_name} {prev_year}
-Previous total: ৳{prev_total:.0f}
-Category breakdown:
-{prev_cat_lines}
-
-Overall: Spending went from ৳{prev_total:.0f} to ৳{total:.0f} ({direction} of {abs(pct_change):.0f}%).
-
-Cover these points:
-1. Total spending and how it changed compared to last month
-2. Top spending categories and notable changes
-3. One practical, personalized saving tip based on their actual spending habits
-
-Write in a warm, conversational tone. Do not use bullet points - write in paragraphs."""
-
-    try:
-        client = _get_client()
-        response = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
-            messages=[
-                {"role": "system", "content": "You are a friendly Bangladeshi personal finance assistant."},
-                {"role": "user", "content": prompt},
-            ],
-        )
-        return response.choices[0].message.content.strip()
-    except Exception as e:
-        err = str(e)
-        if "quota" in err.lower() or "429" in err:
-            return f"API quota exceeded. Please try again later or upgrade your Gemini plan."
-        return None
-
-
 def predict_expense(description, learned_categories=None):
     if not description or len(description) < 2:
         return None
@@ -296,3 +227,108 @@ def predict_expense(description, learned_categories=None):
         amount = extract_amount_fallback(description) or 0
         return {"category": learned_cat, "amount": amount}
     return extract_expense(description, learned_categories)
+
+
+# ── NL Q&A ──────────────────────────────────────────────────
+
+SQL_PROMPT = """You are a SQL query generator for a personal expense tracker. Given a user's natural language question, generate a SQL query to answer it.
+
+Database schema:
+{schema}
+
+Rules:
+1. Return ONLY the SQL query — no explanation, no markdown formatting, no backticks.
+2. Use ONLY SELECT queries.
+3. Always include "user_id = :uid" in the WHERE clause.
+4. Use SQLite-compatible syntax (works with both SQLite and PostgreSQL).
+5. For date filtering use LIKE: date LIKE '2026-06%'
+6. For extracting year/month use SUBSTR(date, 1, 4) for year, SUBSTR(date, 1, 7) for year-month.
+7. Do NOT use date(), strftime(), EXTRACT(), or other date functions.
+8. Column names: id, date, description, amount, category, user_id, created_at
+9. Use COALESCE for safe SUM.
+10. Limit results to 50 rows max.
+11. Use single quotes for strings.
+
+Examples:
+Question: How much did I spend on chira this month?
+SQL: SELECT SUM(amount) as total, COUNT(*) as count FROM expenses WHERE user_id = :uid AND description LIKE '%chira%' AND date LIKE '2026-06%'
+
+Question: What was my biggest expense last week?
+SQL: SELECT description, amount, date, category FROM expenses WHERE user_id = :uid AND date >= '2026-06-07' AND date <= '2026-06-13' ORDER BY amount DESC LIMIT 1
+
+Question: Show me all Dining Out expenses from June
+SQL: SELECT date, description, amount FROM expenses WHERE user_id = :uid AND category = 'Dining Out' AND date LIKE '2026-06%' ORDER BY date
+
+Question: What's my total spending on Transport this year?
+SQL: SELECT SUM(amount) as total FROM expenses WHERE user_id = :uid AND category = 'Transport' AND date LIKE '2026-%'
+
+Question: How many expenses did I have last month?
+SQL: SELECT COUNT(*) as count FROM expenses WHERE user_id = :uid AND date LIKE '2026-05%'
+
+Question: What categories did I spend money on in June?
+SQL: SELECT category, SUM(amount) as total, COUNT(*) as count FROM expenses WHERE user_id = :uid AND date LIKE '2026-06%' GROUP BY category ORDER BY total DESC
+
+Question: {question}
+
+SQL:"""
+
+
+ANSWER_PROMPT = """You are a friendly Bangladeshi personal finance assistant. Given a user's question, the SQL query used, and the results, provide a clear and concise natural language answer.
+
+Question: {question}
+SQL: {sql}
+Results: {results}
+
+Rules:
+- Provide a concise 1-3 sentence answer in English.
+- If results are empty, say so politely.
+- Use ৳ symbol for BDT amounts.
+- Round amounts to 2 decimal places.
+- Be specific and helpful.
+- Do NOT mention SQL or technical details unless the user specifically asks.
+
+Answer:"""
+
+
+def generate_sql(question, schema):
+    if not _has_api_key():
+        return None
+    prompt = SQL_PROMPT.format(schema=schema, question=question)
+    try:
+        client = _get_client()
+        response = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[
+                {"role": "system", "content": "You are a SQL query generator. Return only the SQL query."},
+                {"role": "user", "content": prompt},
+            ],
+            temperature=0.1,
+        )
+        sql = response.choices[0].message.content.strip().strip("```").strip()
+        if sql.lower().startswith("sql"):
+            sql = sql[3:].strip()
+        if sql.lower().startswith("select") or sql.upper().startswith("SELECT"):
+            return sql
+        return None
+    except Exception:
+        return None
+
+
+def answer_from_results(question, sql, results):
+    if not _has_api_key():
+        return None
+    results_str = json.dumps(results, indent=2, ensure_ascii=False)
+    prompt = ANSWER_PROMPT.format(question=question, sql=sql, results=results_str)
+    try:
+        client = _get_client()
+        response = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[
+                {"role": "system", "content": "You are a friendly Bangladeshi personal finance assistant."},
+                {"role": "user", "content": prompt},
+            ],
+            temperature=0.1,
+        )
+        return response.choices[0].message.content.strip()
+    except Exception:
+        return None

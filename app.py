@@ -1,9 +1,10 @@
 from flask import Flask, render_template, request, redirect, url_for, session, jsonify
 from functools import wraps
-from datetime import datetime
+from datetime import datetime, timedelta
 from werkzeug.security import generate_password_hash, check_password_hash
+import re
 import database as db
-from llm_service import extract_expense, predict_expense, extract_keywords, generate_monthly_summary
+from llm_service import extract_expense, predict_expense, extract_keywords, generate_sql, answer_from_results
 from config import USERNAME, PASSWORD, SECRET_KEY, CATEGORY_COLORS, TIMEZONE, SEED_CATEGORIES
 
 app = Flask(__name__)
@@ -36,6 +37,40 @@ def superuser_required(f):
             return jsonify({"error": "Forbidden"}), 403
         return f(*args, **kwargs)
     return decorated_function
+
+
+# ── SQL safety validation ─────────────────────────────────
+
+def _validate_sql(sql):
+    s = sql.strip()
+    while s.endswith(";"):
+        s = s[:-1].strip()
+    if not s.upper().startswith("SELECT"):
+        return False
+    if "--" in s or "/*" in s or "*/" in s:
+        return False
+    forbidden = {"DROP", "DELETE", "INSERT", "UPDATE", "ALTER", "CREATE", "TRUNCATE", "REPLACE", "EXEC"}
+    words = re.findall(r'\b\w+\b', s.upper())
+    for word in words:
+        if word in forbidden:
+            return False
+    return True
+
+
+def _ensure_user_filter(sql):
+    if ":uid" in sql:
+        return sql
+    clauses = ["ORDER BY", "GROUP BY", "LIMIT", "HAVING"]
+    sql_upper = sql.upper()
+    insert_pos = len(sql)
+    for clause in clauses:
+        pos = sql_upper.find(clause)
+        if pos != -1 and pos < insert_pos:
+            insert_pos = pos
+    prefix = sql[:insert_pos].upper()
+    if "WHERE" in prefix:
+        return sql[:insert_pos] + " AND user_id = :uid " + sql[insert_pos:]
+    return sql[:insert_pos] + " WHERE user_id = :uid " + sql[insert_pos:]
 
 
 # ── API: Auth ──────────────────────────────────────────────
@@ -187,8 +222,9 @@ def api_index():
     today_expenses = db.get_expenses_by_date(today, user_id=uid)
     today_total = sum(e["amount"] for e in today_expenses)
     month_total = db.get_month_total(user_id=uid)
+    cutoff = (datetime.now(TIMEZONE) - timedelta(days=15)).strftime("%Y-%m-%d")
     paginated = db.get_recent_expenses_paginated(
-        page=page, per_page=20, user_id=None if is_super else uid
+        page=page, per_page=20, user_id=None if is_super else uid, since=cutoff
     )
     for exp in today_expenses:
         exp["color"] = CATEGORY_COLORS.get(exp["category"], "#6b7280")
@@ -265,66 +301,6 @@ def api_dashboard():
     })
 
 
-# ── API: Summary ────────────────────────────────────────────
-
-@app.route("/api/summary")
-@login_required
-def api_summary():
-    uid = session["user_id"]
-    now = datetime.now(TIMEZONE)
-    year = request.args.get("year", now.year, type=int)
-    month = request.args.get("month", now.month, type=int)
-
-    refresh = request.args.get("refresh", 0, type=int)
-    cached = None if refresh else db.get_summary(uid, year, month)
-    if cached:
-        return jsonify({
-            "summary": cached["summary_text"],
-            "year": year,
-            "month": month,
-            "total": cached["total"],
-            "prev_total": cached["prev_total"],
-            "generated_at": cached["generated_at"],
-            "cached": True,
-        })
-
-    categories = db.get_category_totals_raw(year, month, user_id=uid)
-    total = sum(c["total"] for c in categories)
-
-    prev_month = month - 1 or 12
-    prev_year = year if month > 1 else year - 1
-    prev_categories = db.get_category_totals_raw(prev_year, prev_month, user_id=uid)
-    prev_total = sum(c["total"] for c in prev_categories)
-
-    if total == 0 and prev_total == 0:
-        return jsonify({
-            "summary": None,
-            "year": year,
-            "month": month,
-            "total": 0,
-            "prev_total": 0,
-            "cached": False,
-        })
-
-    summary_text = generate_monthly_summary(
-        year, month, total, prev_total, categories, prev_categories
-    )
-
-    if summary_text:
-        db.save_summary(uid, year, month, summary_text, total, prev_total)
-    else:
-        summary_text = "AI summary unavailable. Check your GEMINI_API_KEY or try again later."
-
-    return jsonify({
-        "summary": summary_text,
-        "year": year,
-        "month": month,
-        "total": total,
-        "prev_total": prev_total,
-        "cached": False,
-    })
-
-
 # ── API: Admin ─────────────────────────────────────────────
 
 @app.route("/api/admin/users")
@@ -374,6 +350,51 @@ def api_learn():
     for kw in extract_keywords(description):
         db.learn_category(session["user_id"], kw, category)
     return jsonify({"success": True})
+
+
+# ── NL Q&A ──────────────────────────────────────────────────
+
+@app.route("/api/ask", methods=["POST"])
+@login_required
+def api_ask():
+    data = request.get_json()
+    question = data.get("question", "").strip()
+    if not question:
+        return jsonify({"error": "Question required"}), 400
+
+    schema = db.get_schema()
+    current_date = datetime.now(TIMEZONE).strftime("%B %d, %Y")
+    question_with_context = f"Today is {current_date}.\n\nQuestion: {question}"
+
+    sql = generate_sql(question_with_context, schema)
+    if not sql:
+        return jsonify({"error": "Could not generate SQL query. Check API key."}), 500
+
+    if not _validate_sql(sql):
+        return jsonify({"error": "Generated query is not a valid SELECT statement"}), 500
+
+    sql = _ensure_user_filter(sql)
+
+    try:
+        conn = db.get_connection()
+        result = conn.execute(db.text(sql), {"uid": session["user_id"]})
+        columns = list(result.keys()) if result.returns_rows else []
+        rows = result.fetchmany(50)
+        data = [dict(r._mapping) for r in rows]
+    except Exception as e:
+        return jsonify({"error": f"Query execution failed: {str(e)}", "sql": sql}), 500
+
+    answer = answer_from_results(question, sql, data[:20])
+    if not answer:
+        total = len(data)
+        answer = f"I found {total} result(s) based on your data. Check the data above for details."
+
+    return jsonify({
+        "answer": answer,
+        "sql": sql,
+        "data": data[:50],
+        "columns": columns,
+    })
 
 
 # ── Existing API routes (unchanged) ────────────────────────
