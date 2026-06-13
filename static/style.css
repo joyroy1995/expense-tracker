@@ -1998,6 +1998,21 @@ body {
     .btn-delete {
         opacity: 1;
     }
+
+    .chat-suggestion-chip {
+        padding: 3px 8px;
+        font-size: 11px;
+    }
+    .chat-suggestion-chips {
+        gap: 4px;
+        margin-top: 4px;
+    }
+    .welcome-bubble {
+        font-size: 12px;
+    }
+    .welcome-bubble small {
+        font-size: 11px;
+    }
 }
 
 /* ── Budget Page ────────────────────────────────────────────── */
