@@ -985,7 +985,7 @@ def get_schema():
     budget_cats = conn.execute(
         text("SELECT DISTINCT category FROM budgets ORDER BY category")
     ).fetchall()
-    budget_cats_display = [("Overall (total spending)" if r[0] == OVERALL_BUDGET_CATEGORY else r[0]) for r in budget_cats]
+    budget_cats_display = [("__overall__ (Overall total spending)" if r[0] == OVERALL_BUDGET_CATEGORY else r[0]) for r in budget_cats]
     budget_cats_str = ", ".join(budget_cats_display) if budget_cats_display else "none set"
 
     # Get date range of expenses
@@ -1030,6 +1030,8 @@ Relationships: budgets.user_id → users.id (each budget belongs to a user)
 Semantics: budgets are recurring monthly limits. A budget resets each month.
            To compare spending vs budget in a given month, LEFT JOIN budgets → expenses
            on user_id AND category AND SUBSTR(expenses.date, 1, 7) = target_month.
+           The special category '__overall__' in budgets represents the total spending
+           budget across all categories. Filter with b.category = '__overall__'.
 """
 
 

@@ -254,7 +254,10 @@ def _fmt_dates():
     today = date.today()
     ym = today.strftime("%Y-%m")
     prev = (today.replace(day=1) - timedelta(days=1)).strftime("%Y-%m")
-    return today.strftime("%Y-%m-%d"), ym, prev, today.strftime("%Y")
+    seven_days_ago = (today - timedelta(days=7)).isoformat()
+    week_start = (today - timedelta(days=today.weekday())).isoformat()
+    last_week_start = (today - timedelta(days=today.weekday() + 7)).isoformat()
+    return today.isoformat(), ym, prev, today.strftime("%Y"), seven_days_ago, week_start, last_week_start
 
 SQL_PROMPT = """You are a SQL query generator for a personal expense tracker. Given a user's natural language question and the current date, generate a SQL query to answer it.
 
@@ -269,13 +272,13 @@ Rules:
 1. Return ONLY the SQL query — no explanation, no markdown formatting, no backticks.
 2. Use ONLY SELECT queries.
 3. Always include "user_id = :uid" in the WHERE clause.
-4. Use SQLite-compatible syntax (no PostgreSQL-specific functions).
+4. Use portable SQL with string-based date comparisons — avoid database-specific functions like `date()` or `strftime()`.
 5. For date filtering:
    - Use LIKE with pattern: date LIKE '{current_month}%'
    - Use SUBSTR(date, 1, 4) for year extraction
    - Use SUBSTR(date, 1, 7) for year-month extraction
    - For date ranges use date >= 'YYYY-MM-DD' AND date <= 'YYYY-MM-DD'
-   - Derive dates relative to "{today}" (today)
+   - Pre-computed relative dates — use as literal strings: today={today}, 7_days_ago={seven_days_ago}, week_start={week_start}, last_week_start={last_week_start}
 6. Column names: id, date, description, amount, category, user_id, created_at
 7. Use COALESCE for safe SUM/AVG aggregates.
 8. Limit results to 50 rows max unless the user asks for a specific number.
@@ -296,7 +299,7 @@ Q: What categories did I spend on this month?
 SQL: SELECT category, COALESCE(SUM(amount), 0) as total, COUNT(*) as count FROM expenses WHERE user_id = :uid AND date LIKE '{current_month}%' GROUP BY category ORDER BY total DESC
 
 Q: How much did I spend in the last 7 days?
-SQL: SELECT COALESCE(SUM(amount), 0) as total FROM expenses WHERE user_id = :uid AND date >= date('{today}', '-7 days')
+SQL: SELECT COALESCE(SUM(amount), 0) as total FROM expenses WHERE user_id = :uid AND date >= '{seven_days_ago}'
 
 Q: What was my most expensive expense this month?
 SQL: SELECT date, description, amount, category FROM expenses WHERE user_id = :uid AND date LIKE '{current_month}%' ORDER BY amount DESC LIMIT 1
@@ -323,10 +326,12 @@ Q: What are the top 5 categories I spend the most on this year?
 SQL: SELECT category, COALESCE(SUM(amount), 0) as total FROM expenses WHERE user_id = :uid AND date LIKE '{current_year}%' GROUP BY category ORDER BY total DESC LIMIT 5
 
 Q: Show all expenses from this week
-SQL: SELECT date, description, amount, category FROM expenses WHERE user_id = :uid AND date >= date('{today}', 'weekday 0', '-6 days') AND date <= '{today}' ORDER BY date
+SQL: SELECT date, description, amount, category FROM expenses WHERE user_id = :uid AND date >= '{week_start}' AND date <= '{today}' ORDER BY date
 
-Q: How much did I spend on weekends this month?
-SQL: SELECT COALESCE(SUM(amount), 0) as total FROM expenses WHERE user_id = :uid AND date LIKE '{current_month}%' AND CAST(strftime('%%w', date) AS INTEGER) IN (0, 6)
+Q: How does this week compare to last week?
+SQL: SELECT 'This week' as period, COALESCE(SUM(amount), 0) as total FROM expenses WHERE user_id = :uid AND date >= '{week_start}' AND date <= '{today}' UNION ALL SELECT 'Last week', COALESCE(SUM(amount), 0) FROM expenses WHERE user_id = :uid AND date >= '{last_week_start}' AND date < '{week_start}'
+Q: What was my largest expense last month?
+SQL: SELECT date, description, amount, category FROM expenses WHERE user_id = :uid AND date LIKE '{last_month}%' ORDER BY amount DESC LIMIT 1
 
 Q: {question}
 SQL:"""
@@ -356,10 +361,12 @@ Answer:"""
 def generate_sql(question, schema, retries=1):
     if not _has_api_key():
         return None
-    today, current_month, last_month, current_year = _fmt_dates()
+    today, current_month, last_month, current_year, seven_days_ago, week_start, last_week_start = _fmt_dates()
     prompt = SQL_PROMPT.format(
         today=today, current_month=current_month, last_month=last_month,
-        current_year=current_year, schema=schema, question=question,
+        current_year=current_year, seven_days_ago=seven_days_ago,
+        week_start=week_start, last_week_start=last_week_start,
+        schema=schema, question=question,
     )
     last_error = None
     for attempt in range(retries + 1):
