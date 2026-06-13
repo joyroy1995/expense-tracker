@@ -270,6 +270,38 @@ body {
     z-index: 150;
 }
 
+.sidebar-tab {
+    display: none;
+    position: fixed;
+    top: 50%;
+    left: 0;
+    transform: translateY(-50%);
+    width: 5px;
+    height: 56px;
+    background: var(--primary);
+    border-radius: 0 4px 4px 0;
+    cursor: pointer;
+    z-index: 100;
+    opacity: 0.3;
+    transition: opacity 0.2s;
+    pointer-events: auto;
+}
+
+@media (hover: hover) {
+    .sidebar-tab:hover {
+        opacity: 0.7;
+    }
+}
+
+@media (max-width: 768px) {
+    .sidebar-tab {
+        display: block;
+    }
+    body.sidebar-open .sidebar-tab {
+        display: none;
+    }
+}
+
 .topbar {
     display: none;
     position: fixed;

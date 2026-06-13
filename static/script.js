@@ -123,7 +123,7 @@ document.addEventListener('click', (e) => {
     if (window.innerWidth >= 769) {
       document.body.classList.toggle('sidebar-collapsed');
     } else {
-      document.body.classList.remove('sidebar-open');
+    document.body.classList.remove('sidebar-open', 'sidebar-collapsed');
     }
   }
 });
@@ -131,6 +131,36 @@ document.addEventListener('click', (e) => {
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
     document.body.classList.remove('sidebar-open', 'sidebar-collapsed');
+  }
+});
+
+// ── Mobile touch: swipe + tab tap ──
+
+let touchStartX = 0;
+let touchStartY = 0;
+
+document.addEventListener('touchstart', (e) => {
+  touchStartX = e.changedTouches[0].screenX;
+  touchStartY = e.changedTouches[0].screenY;
+});
+
+document.addEventListener('touchend', (e) => {
+  if (window.innerWidth > 768) return;
+  const deltaX = e.changedTouches[0].screenX - touchStartX;
+  const deltaY = e.changedTouches[0].screenY - touchStartY;
+  if (Math.abs(deltaX) < 30) return;
+  if (Math.abs(deltaX) < Math.abs(deltaY) * 1.5) return;
+  const isOpen = document.body.classList.contains('sidebar-open');
+  if (deltaX > 80 && touchStartX < 40 && !isOpen) {
+    document.body.classList.add('sidebar-open');
+  } else if (deltaX < -80 && isOpen) {
+    document.body.classList.remove('sidebar-open');
+  }
+});
+
+document.getElementById('sidebarTab')?.addEventListener('click', () => {
+  if (window.innerWidth <= 768) {
+    document.body.classList.toggle('sidebar-open');
   }
 });
 
@@ -1741,8 +1771,7 @@ async function init() {
 }
 
 // Logout handler
-document.getElementById('logoutBtn')?.addEventListener('click', async (e) => {
-  e.preventDefault();
+document.getElementById('logoutBtn')?.addEventListener('click', async () => {
   await api.post('/api/logout');
   currentUser = null;
   navigate('/login');
