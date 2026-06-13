@@ -1502,12 +1502,15 @@ let voiceMediaRecorder = null;
 let voiceStream = null;
 let voiceChunks = [];
 let voiceIsNative = false;
+let voiceActive = false;
+let isSendingMessage = false;
 
 function startVoiceInput() {
   const voiceBtn = document.getElementById('voiceBtn');
   const input = document.getElementById('chatInput');
   if (!input || !voiceBtn) return;
 
+  voiceActive = true;
   const hasNativeSpeech = !!(window.SpeechRecognition || window.webkitSpeechRecognition);
 
   if (hasNativeSpeech) {
@@ -1543,7 +1546,7 @@ function startNativeVoice(input, voiceBtn) {
 
     clearTimeout(voiceSilenceTimer);
     voiceSilenceTimer = setTimeout(() => {
-      if (input.value.trim()) {
+      if (voiceActive && input.value.trim()) {
         stopVoiceInput();
         sendChatMessage();
       }
@@ -1598,6 +1601,7 @@ function startMediaRecorderVoice(input, voiceBtn) {
       };
 
       voiceMediaRecorder.onstop = () => {
+        if (!voiceActive) return;
         const blob = new Blob(voiceChunks, { type: mimeType || 'audio/webm' });
         const formData = new FormData();
         formData.append('audio', blob, 'recording.' + (mimeType.includes('mp4') ? 'mp4' : 'webm'));
@@ -1635,9 +1639,12 @@ function startMediaRecorderVoice(input, voiceBtn) {
 
 function stopVoiceInput() {
   clearTimeout(voiceSilenceTimer);
+  voiceActive = false;
 
   if (voiceRecognition) {
     try {
+      voiceRecognition.onresult = null;
+      voiceRecognition.onerror = null;
       voiceRecognition.onend = null;
       voiceRecognition.stop();
     } catch (e) {}
@@ -1796,43 +1803,73 @@ function renderDataTable(columns, data) {
 }
 
 async function sendChatMessage() {
-  stopVoiceInput();
-  const input = document.getElementById('chatInput');
-  if (!input) return;
-  let message = input.value.trim();
-  if (!message) return;
-  input.value = '';
+  if (isSendingMessage) return;
+  isSendingMessage = true;
+  try {
+    stopVoiceInput();
+    const input = document.getElementById('chatInput');
+    if (!input) return;
+    let message = input.value.trim();
+    if (!message) return;
+    input.value = '';
 
-  // Strip leading action words for cleaner parsing
-  message = message.replace(/^(add|save|log|record)\s+/i, '').trim();
+    // Strip leading action words for cleaner parsing
+    message = message.replace(/^(add|save|log|record)\s+/i, '').trim();
 
-  // Build conversation history (last 6 pairs)
-  const history = [];
-  for (const m of chatMessages) {
-    if (m.type === 'ai' || m.type === 'user') {
-      history.push({ role: m.type, content: m.content });
+    // Build conversation history (last 6 pairs)
+    const history = [];
+    for (const m of chatMessages) {
+      if (m.type === 'ai' || m.type === 'user') {
+        history.push({ role: m.type, content: m.content });
+      }
     }
-  }
 
-  addChatMessage('user', message);
-  addChatMessage('loading', '');
-  const res = await api.post('/api/chat', { message, history: history.slice(-12) });
-  chatMessages = chatMessages.filter(m => m.type !== 'loading');
-  if (!res.ok) {
-    addChatMessage('ai', 'Sorry, I couldn\'t process that. ' + (res.error || 'Please try again.'));
-    return;
-  }
-  const d = res.data;
-
-  if (d.type === 'budget') {
-    const res = await api.post('/api/budgets/set', { category: d.category, amount: d.amount });
-    if (res.ok) {
-      const displayName = d.category === '__overall__' ? 'Overall' : d.category;
-      addChatMessage('ai', `✅ Budget set: **${displayName}** → ৳${Number(d.amount).toFixed(2)}/month`);
-      showToast(`${displayName} budget set to ৳${Number(d.amount).toFixed(2)}`, 'success');
-    } else {
-      addChatMessage('ai', `Sorry, I couldn't set that budget. ${res.error || 'Please try again.'}`);
+    addChatMessage('user', message);
+    addChatMessage('loading', '');
+    const res = await api.post('/api/chat', { message, history: history.slice(-12) });
+    chatMessages = chatMessages.filter(m => m.type !== 'loading');
+    if (!res.ok) {
+      addChatMessage('ai', 'Sorry, I couldn\'t process that. ' + (res.error || 'Please try again.'));
+      return;
     }
+    const d = res.data;
+
+    if (d.type === 'budget') {
+      const res = await api.post('/api/budgets/set', { category: d.category, amount: d.amount });
+      if (res.ok) {
+        const displayName = d.category === '__overall__' ? 'Overall' : d.category;
+        addChatMessage('ai', `✅ Budget set: **${displayName}** → ৳${Number(d.amount).toFixed(2)}/month`);
+        showToast(`${displayName} budget set to ৳${Number(d.amount).toFixed(2)}`, 'success');
+      } else {
+        addChatMessage('ai', `Sorry, I couldn't set that budget. ${res.error || 'Please try again.'}`);
+      }
+      const body = document.getElementById('aiChatBody');
+      const icon = document.getElementById('aiChatCollapseIcon');
+      if (body && body.classList.contains('chat-body-collapsed')) {
+        body.classList.remove('chat-body-collapsed');
+        if (icon) icon.textContent = '▼';
+        localStorage.setItem('aiChatCollapsed', 'false');
+      }
+      return;
+    }
+
+    if (d.type === 'expense') {
+      chatMessages.push({ type: 'expense_preview', items: d.items, date: d.date });
+      renderChatMessages();
+      const body = document.getElementById('aiChatBody');
+      const icon = document.getElementById('aiChatCollapseIcon');
+      if (body && body.classList.contains('chat-body-collapsed')) {
+        body.classList.remove('chat-body-collapsed');
+        if (icon) icon.textContent = '▼';
+        localStorage.setItem('aiChatCollapsed', 'false');
+      }
+      return;
+    }
+
+    // Q&A response
+    const suggestions = pickSuggestions(message, d.answer);
+    addChatMessage('ai', d.answer || 'I found ' + (d.data ? d.data.length : 0) + ' result(s).', d.sql, d.data, d.columns, suggestions);
+
     const body = document.getElementById('aiChatBody');
     const icon = document.getElementById('aiChatCollapseIcon');
     if (body && body.classList.contains('chat-body-collapsed')) {
@@ -1840,32 +1877,8 @@ async function sendChatMessage() {
       if (icon) icon.textContent = '▼';
       localStorage.setItem('aiChatCollapsed', 'false');
     }
-    return;
-  }
-
-  if (d.type === 'expense') {
-    chatMessages.push({ type: 'expense_preview', items: d.items, date: d.date });
-    renderChatMessages();
-    const body = document.getElementById('aiChatBody');
-    const icon = document.getElementById('aiChatCollapseIcon');
-    if (body && body.classList.contains('chat-body-collapsed')) {
-      body.classList.remove('chat-body-collapsed');
-      if (icon) icon.textContent = '▼';
-      localStorage.setItem('aiChatCollapsed', 'false');
-    }
-    return;
-  }
-
-  // Q&A response
-  const suggestions = pickSuggestions(message, d.answer);
-  addChatMessage('ai', d.answer || 'I found ' + (d.data ? d.data.length : 0) + ' result(s).', d.sql, d.data, d.columns, suggestions);
-
-  const body = document.getElementById('aiChatBody');
-  const icon = document.getElementById('aiChatCollapseIcon');
-  if (body && body.classList.contains('chat-body-collapsed')) {
-    body.classList.remove('chat-body-collapsed');
-    if (icon) icon.textContent = '▼';
-    localStorage.setItem('aiChatCollapsed', 'false');
+  } finally {
+    isSendingMessage = false;
   }
 }
 
