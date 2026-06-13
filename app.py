@@ -218,6 +218,41 @@ def _fix_limit_syntax(sql, question):
     return sql[:m.start()] + f'LIMIT {limit} OFFSET {offset}' + sql[m.end():]
 
 
+_ORDINAL_MAP = {
+    'second': 2, 'third': 3, 'fourth': 4, 'fifth': 5,
+    'sixth': 6, 'seventh': 7, 'eighth': 8, 'ninth': 9, 'tenth': 10,
+}
+
+
+def _fix_ordinal_limit(sql, question):
+    """Fix LIMIT+OFFSET when question asks for 'second most expensive' etc."""
+    m = re.search(r'\b(second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|\d+(?:st|nd|rd|th))\b', question, re.IGNORECASE)
+    if not m:
+        return sql
+    word = m.group(1).lower()
+    if word in _ORDINAL_MAP:
+        n = _ORDINAL_MAP[word]
+    else:
+        n = int(re.sub(r'[^\d]', '', word))
+    offset_val = n - 1
+    singular = bool(re.search(r'\b(item|expense|transaction|purchase)\b', question, re.IGNORECASE) and
+                    not re.search(r'\b(items|expenses|transactions|purchases)\b', question, re.IGNORECASE))
+    if 'OFFSET' in sql.upper():
+        if singular:
+            sql = re.sub(r'LIMIT\s+\d+', 'LIMIT 1', sql, flags=re.IGNORECASE)
+        sql = re.sub(r'OFFSET\s+\d+', f'OFFSET {offset_val}', sql, flags=re.IGNORECASE)
+    else:
+        if 'LIMIT' in sql.upper():
+            if singular:
+                sql = re.sub(r'LIMIT\s+\d+', f'LIMIT 1 OFFSET {offset_val}', sql, flags=re.IGNORECASE)
+            else:
+                sql = re.sub(r'LIMIT\s+\d+', f'LIMIT 50 OFFSET {offset_val}', sql, flags=re.IGNORECASE)
+        else:
+            limit_val = 1 if singular else 50
+            sql += f' LIMIT {limit_val} OFFSET {offset_val}'
+    return sql
+
+
 # ── API: Auth ──────────────────────────────────────────────
 
 @app.route("/api/me")
@@ -527,6 +562,7 @@ def _run_qa_pipeline(question, question_with_context, schema, history, uid, forc
     sql = _fix_frequency_sql(sql, question)
     sql = _fix_top_n_limit(sql, question)
     sql = _fix_limit_syntax(sql, question)
+    sql = _fix_ordinal_limit(sql, question)
 
     try:
         conn = db.get_connection()
@@ -544,6 +580,7 @@ def _run_qa_pipeline(question, question_with_context, schema, history, uid, forc
             corrected = _fix_frequency_sql(corrected, question)
             corrected = _fix_top_n_limit(corrected, question)
             corrected = _fix_limit_syntax(corrected, question)
+            corrected = _fix_ordinal_limit(corrected, question)
             try:
                 conn2 = db.get_connection()
                 result = conn2.execute(db.text(corrected), {"uid": uid})
