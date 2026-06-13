@@ -253,6 +253,23 @@ def _fix_ordinal_limit(sql, question):
     return sql
 
 
+def _fix_history_id_filter(sql, question):
+    """Strip stale id exclusion filters left over from history context.
+    Removes AND id != N / AND expenses.id != N / AND e.id != N patterns
+    when the current question does NOT contain unambiguous exclusion keywords.
+    Bare 'other' is intentionally excluded since it matches the 'Other' category."""
+    exclusion_kw = re.search(r'\b(?:other\s+than|except|excluding|exclude|not\s+including|without|but\s+not|aside\s+from)\b', question, re.IGNORECASE)
+    if exclusion_kw:
+        return sql
+    sql = re.sub(
+        r'\s+AND\s+(?:expenses\.|e\.)?id\s*!=\s*\d+',
+        '',
+        sql,
+        flags=re.IGNORECASE,
+    )
+    return sql
+
+
 # ── API: Auth ──────────────────────────────────────────────
 
 @app.route("/api/me")
@@ -563,6 +580,7 @@ def _run_qa_pipeline(question, question_with_context, schema, history, uid, forc
     sql = _fix_top_n_limit(sql, question)
     sql = _fix_limit_syntax(sql, question)
     sql = _fix_ordinal_limit(sql, question)
+    sql = _fix_history_id_filter(sql, question)
 
     try:
         conn = db.get_connection()
@@ -581,6 +599,7 @@ def _run_qa_pipeline(question, question_with_context, schema, history, uid, forc
             corrected = _fix_top_n_limit(corrected, question)
             corrected = _fix_limit_syntax(corrected, question)
             corrected = _fix_ordinal_limit(corrected, question)
+            corrected = _fix_history_id_filter(corrected, question)
             try:
                 conn2 = db.get_connection()
                 result = conn2.execute(db.text(corrected), {"uid": uid})

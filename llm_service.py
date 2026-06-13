@@ -275,7 +275,7 @@ Rules:
 1. Return ONLY the SQL query — no explanation, no markdown formatting, no backticks.
 2. Use ONLY SELECT queries.
 3. Always include "user_id = :uid" in the WHERE clause.
-4. Use portable SQL with string-based date comparisons — avoid database-specific functions like `date()` or `strftime()`.
+4. Use only conditions from the current question. The conversation history is provided for context about the user's previous questions only — do NOT carry over WHERE conditions (such as id != N, category filters, date filters, or any other clause) from history into the current query unless the current question explicitly repeats or implies them.
 5. For date filtering:
    - Use LIKE with pattern: date LIKE '{current_month}%'
    - Use SUBSTR(date, 1, 4) for year extraction
@@ -291,6 +291,7 @@ Rules:
 11. For description search, use LIKE with %% wildcards: description LIKE '%%keyword%%'
 12. When comparing periods, use SUBSTR(date, 1, 7) in GROUP BY or WHERE.
 13. For frequency/count questions ("how many times", "most used category", "in terms of frequency", "how often"), use COUNT(*) instead of SUM(amount). If the user asks which category by frequency, use COUNT(*) as count and ORDER BY count DESC.
+14. Use portable SQL with string-based date comparisons — avoid database-specific functions like `date()` or `strftime()`.
 
 Examples:
 
@@ -505,9 +506,10 @@ def _display_cat(cat):
 
 
 def format_answer(columns, data, question):
-    """Generate natural language answer from query results without an LLM call."""
+    """Generate natural language answer from query results without an LLM call.
+    Returns a dict {text, type, ...metadata} for rich frontend rendering."""
     if not data:
-        return "No expenses found matching your question."
+        return {"text": "No expenses found matching your question.", "type": "text"}
 
     c_lower = [c.lower() for c in columns]
     amt_col = next((c for c in columns if c.lower() in ("total", "amount", "sum", "spent", "remaining")), None)
@@ -532,13 +534,17 @@ def format_answer(columns, data, question):
         budget = float(row.get(budget_col, 0))
         spent = float(row.get(amt_col, 0)) if amt_col else 0
         cat = _display_cat(row.get(cat_col, "")) if cat_col else ""
-        prefix = f" for {cat}" if cat else ""
+        pct = round((spent / budget * 100) if budget else 0, 0)
         if remaining > 0:
-            return f"You have ৳{remaining:.2f} remaining{prefix} (spent ৳{spent:.2f} of ৳{budget:.2f} budget)."
+            text = f"You have ৳{remaining:.2f} remaining"
+            if cat:
+                text += f" for {cat}"
+            text += f" (spent ৳{spent:.2f} of ৳{budget:.2f} budget)."
         elif remaining == 0:
-            return f"You have used your entire budget{prefix} (৳{budget:.2f})."
+            text = f"You have used your entire budget{' for ' + cat if cat else ''} (৳{budget:.2f})."
         else:
-            return f"You have exceeded your budget{prefix} by ৳{abs(remaining):.2f} (spent ৳{spent:.2f} of ৳{budget:.2f})."
+            text = f"You have exceeded your budget{' for ' + cat if cat else ''} by ৳{abs(remaining):.2f} (spent ৳{spent:.2f} of ৳{budget:.2f})."
+        return {"text": text, "type": "budget", "spent": spent, "budget": budget, "remaining": remaining, "category": cat, "pct": pct}
 
     # --- Pacing / on-track ---
     if daily_avg_col and days_elapsed_col and days_in_month_col and amt_col:
@@ -549,31 +555,31 @@ def format_answer(columns, data, question):
         dim = int(row.get(days_in_month_col, 30))
         projected = round(daily_avg * dim, 0)
         left_days = dim - de
-        remaining_budget = " (no budget set)"
-        for b in data:  # check if budget data merged
-            if row.get(budget_col if budget_col else ""):
-                pass
         if total_spent and daily_avg:
-            return f"Spent ৳{total_spent:,.0f} in {de} day(s) (avg: ৳{daily_avg:,.0f}/day). On track for ৳{projected:,.0f} by end of month ({left_days} day(s) left)."
-        return f"Spent ৳{total_spent:,.0f} in {de} day(s) this month."
+            text = f"Spent ৳{total_spent:,.0f} in {de} day(s) (avg: ৳{daily_avg:,.0f}/day). On track for ৳{projected:,.0f} by end of month ({left_days} day(s) left)."
+        else:
+            text = f"Spent ৳{total_spent:,.0f} in {de} day(s) this month."
+        return {"text": text, "type": "pacing", "total": total_spent, "daily_avg": daily_avg, "projected": projected, "days_elapsed": de, "days_in_month": dim}
 
     # --- Single or multi-month comparison ---
     if month_col and amt_col and len(data) >= 2:
         rows_sorted = sorted(data, key=lambda r: r.get(month_col, ""))
-        labels = []
+        months = []
         for r in rows_sorted:
-            m = r.get(month_col, "")
-            t = float(r.get(amt_col, 0))
-            labels.append(f"{m} (৳{t:.2f})")
-        return f"Monthly totals: {', '.join(labels)}."
+            months.append({"label": r.get(month_col, ""), "amount": float(r.get(amt_col, 0))})
+        label_strs = [f'{m["label"]} (৳{m["amount"]:.2f})' for m in months]
+        text = "Monthly totals: " + ", ".join(label_strs) + "."
+        return {"text": text, "type": "comparison", "months": months}
 
     # --- Average value ---
     if avg_col:
         avg = float(data[0].get(avg_col, 0))
         cnt_val = float(data[0].get(cnt_col, 0)) if cnt_col else 0
         if cnt_val:
-            return f"Average daily spending is ৳{avg:.2f} across {int(cnt_val)} day(s)."
-        return f"Average is ৳{avg:.2f}."
+            text = f"Average daily spending is ৳{avg:.2f} across {int(cnt_val)} day(s)."
+        else:
+            text = f"Average is ৳{avg:.2f}."
+        return {"text": text, "type": "average", "avg": avg, "count": int(cnt_val) if cnt_val else 0}
 
     # --- Single aggregate (SUM, COUNT) ---
     if len(data) == 1 and not cat_col and not month_col:
@@ -581,11 +587,11 @@ def format_answer(columns, data, question):
         total = float(row.get(amt_col, 0)) if amt_col else None
         count = int(row.get(cnt_col, 0)) if cnt_col else None
         if total is not None and count is not None:
-            return f"Your total is ৳{total:.2f} across {count} transaction(s)."
+            return {"text": f"Your total is ৳{total:.2f} across {count} transaction(s).", "type": "total", "total": total, "count": count}
         if total is not None:
-            return f"Your total is ৳{total:.2f}."
+            return {"text": f"Your total is ৳{total:.2f}.", "type": "total", "total": total, "count": 0}
         if count is not None:
-            return f"That's {count} transaction(s)."
+            return {"text": f"That's {count} transaction(s).", "type": "total", "total": 0, "count": count}
 
     # --- Single result with description ---
     if len(data) == 1 and desc_col and amt_col:
@@ -593,10 +599,11 @@ def format_answer(columns, data, question):
         desc = row.get(desc_col, "")
         amt_val = float(row.get(amt_col, 0))
         date_val = row.get(date_col, "") if date_col else ""
-        base = f"৳{amt_val:.2f} for \"{desc}\""
+        text = f"It was ৳{amt_val:.2f} for \"{desc}\""
         if date_val:
-            base += f" on {date_val}"
-        return f"It was {base}."
+            text += f" on {date_val}"
+        text += "."
+        return {"text": text, "type": "expense", "description": desc, "amount": amt_val, "date": date_val}
 
     # --- Single result max/min ---
     if len(data) == 1 and (max_col or min_col):
@@ -604,27 +611,35 @@ def format_answer(columns, data, question):
         val = float(row.get(max_col or min_col, 0))
         desc = row.get(desc_col, "")
         cat = _display_cat(row.get(cat_col, ""))
+        is_max = bool(max_col)
         suffix = f" ({desc})" if desc else f" in {cat}" if cat else ""
-        label = "Most" if max_col else "Least"
-        return f"{label} expensive{suffix}: ৳{val:.2f}."
+        label = "Most" if is_max else "Least"
+        text = f"{label} expensive{suffix}: ৳{val:.2f}."
+        return {"text": text, "type": "extremum", "value": val, "description": desc, "category": cat, "is_max": is_max}
 
     # --- Category breakdown ---
     if cat_col and amt_col and len(data) > 1:
         total = sum(float(r.get(amt_col, 0)) for r in data)
         top = max(data, key=lambda r: float(r.get(amt_col, 0)))
-        return f"Total: ৳{total:.2f} across {len(data)} categories. Most spent on {_display_cat(top[cat_col])} (৳{float(top[amt_col]):.2f})."
+        categories = []
+        for r in data:
+            cat_name = _display_cat(r.get(cat_col, ""))
+            cat_amt = float(r.get(amt_col, 0))
+            categories.append({"name": cat_name, "amount": cat_amt, "pct": round((cat_amt / total * 100) if total else 0, 1)})
+        text = f"Total: ৳{total:.2f} across {len(data)} categories. Most spent on {_display_cat(top[cat_col])} (৳{float(top[amt_col]):.2f})."
+        return {"text": text, "type": "category_breakdown", "total": total, "categories": categories}
 
     # --- Category with count (frequency) ---
     if cat_col and cnt_col and len(data) == 1:
         row = data[0]
         cat = row.get(cat_col, "")
         cnt = int(row.get(cnt_col, 0))
-        return f"Most used category: {_display_cat(cat)} ({cnt} transaction(s))."
+        return {"text": f"Most used category: {_display_cat(cat)} ({cnt} transaction(s)).", "type": "frequency", "category": _display_cat(cat), "count": cnt}
 
     # --- General list ---
     total = sum(float(r.get(amt_col, 0)) for r in data) if amt_col else 0
     info = f" totaling ৳{total:.2f}" if amt_col else ""
-    return f"Found {len(data)} result(s){info}."
+    return {"text": f"Found {len(data)} result(s){info}.", "type": "list", "count": len(data), "total": total}
 
 
 # ── Expense Splitting ──────────────────────────────────────────
@@ -1101,15 +1116,19 @@ Rules:
 Answer:"""
 
 
+def _extract_text(a):
+    """Extract text from answer (dict or string)."""
+    return a.get("text", str(a)) if isinstance(a, dict) else str(a)
+
 def compose_answers(question, sub_results, history=None):
     """Combine results from multiple sub-questions into one answer."""
     if not _has_api_key():
-        answers = [r.get("answer", "") for r in sub_results if r.get("answer")]
+        answers = [_extract_text(r.get("answer", "")) for r in sub_results if r.get("answer")]
         return " ".join(answers) if answers else None
 
     today = _d.today().strftime("%B %d, %Y")
     results_str = "\n".join(
-        f"Sub-answer {i+1}: {r.get('answer', '')}"
+        f"Sub-answer {i+1}: {_extract_text(r.get('answer', ''))}"
         for i, r in enumerate(sub_results)
     )
     hist_text = _fmt_history(history)

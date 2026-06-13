@@ -1676,6 +1676,100 @@ function stopVoiceInput() {
   voiceChunks = [];
 }
 
+function _richCatColor(cat) {
+  const colors = window.categoryColors || {};
+  return colors[cat] || '#6b7280';
+}
+
+function renderRichAnswer(answer) {
+  if (typeof answer === 'string') return highlightInline(answer);
+  if (!answer || !answer.type) return highlightInline(String(answer));
+  const t = answer.type;
+  let h = '<div class="rich-answer">';
+
+  if (t === 'budget') {
+    const pct = Math.min(answer.pct || 0, 100);
+    const cls = pct < 80 ? 'safe' : pct < 100 ? 'warn' : 'danger';
+    const catHtml = answer.category ? `<span class="rich-cat-badge" style="background:${_richCatColor(answer.category)}20;color:${_richCatColor(answer.category)};border:1px solid ${_richCatColor(answer.category)}40">${esc(answer.category)}</span>` : '';
+    h += `<div class="rich-total-hero"><div class="amount" style="color:${answer.remaining > 0 ? '#22c55e' : '#ef4444'}">${answer.remaining > 0 ? '✅' : '⚠️'} ৳${Number(answer.remaining).toFixed(2)}</div><div class="sub">${answer.remaining > 0 ? 'remaining' : 'overspent'}</div></div>`;
+    h += `${catHtml}`;
+    h += `<div class="rich-progress"><div class="rich-progress-fill ${cls}" style="width:${pct}%"></div></div>`;
+    h += `<div class="rich-budget-stats"><div class="rich-budget-stat"><div class="value">৳${Number(answer.spent).toFixed(2)}</div><div class="label">Spent</div></div><div class="rich-budget-stat"><div class="value">৳${Number(answer.budget).toFixed(2)}</div><div class="label">Budget</div></div><div class="rich-budget-stat"><div class="value">${pct}%</div><div class="label">Used</div></div></div>`;
+  } else if (t === 'pacing') {
+    h += `<div class="rich-pacing-grid">`;
+    h += `<div class="rich-pacing-item"><span class="value">৳${Number(answer.total).toLocaleString('en-IN', {maximumFractionDigits:0})}</span><div class="label">Spent</div></div>`;
+    h += `<div class="rich-pacing-item"><span class="value">৳${Number(answer.daily_avg).toLocaleString('en-IN', {maximumFractionDigits:0})}</span><div class="label">Avg / day</div></div>`;
+    h += `<div class="rich-pacing-item"><span class="value">৳${Number(answer.projected).toLocaleString('en-IN', {maximumFractionDigits:0})}</span><div class="label">Projected</div></div>`;
+    h += `<div class="rich-pacing-item"><span class="value">${answer.days_elapsed}/${answer.days_in_month}</span><div class="label">Days</div></div>`;
+    h += `</div>`;
+  } else if (t === 'comparison') {
+    const months = answer.months || [];
+    const maxAmt = Math.max(...months.map(m => m.amount), 1);
+    h += `<div class="rich-compare">`;
+    months.forEach(m => {
+      const pct = (m.amount / maxAmt) * 100;
+      h += `<div class="rich-compare-bar"><span class="rich-compare-label">${esc(m.label)}</span><div class="rich-compare-track"><div class="rich-compare-fill" style="width:${Math.max(pct, 4)}%">${pct > 25 ? '৳' + Number(m.amount).toLocaleString('en-IN', {maximumFractionDigits:0}) : ''}</div></div><span class="rich-compare-amount">৳${Number(m.amount).toLocaleString('en-IN', {maximumFractionDigits:0})}</span></div>`;
+    });
+    h += `</div>`;
+  } else if (t === 'category_breakdown') {
+    const cats = answer.categories || [];
+    const maxAmt = Math.max(...cats.map(c => c.amount), 1);
+    h += `<div class="rich-cat-breakdown">`;
+    cats.forEach(c => {
+      const pct = (c.amount / maxAmt) * 100;
+      const col = _richCatColor(c.name);
+      h += `<div class="rich-cat-row"><span class="rich-cat-name">${esc(c.name)}</span><div class="rich-cat-bar" style="width:${Math.max(pct, 4)}%;background:${col}"></div><span class="rich-cat-amt">৳${Number(c.amount).toFixed(2)}</span><span class="rich-cat-pct">${c.pct}%</span></div>`;
+    });
+    h += `</div>`;
+  } else if (t === 'total') {
+    h += `<div class="rich-total-hero"><div class="amount">৳${Number(answer.total).toLocaleString('en-IN', {maximumFractionDigits:0})}</div>`;
+    if (answer.count) h += `<div class="sub">across ${answer.count} transaction(s)</div>`;
+    h += `</div>`;
+  } else if (t === 'expense') {
+    const col = _richCatColor(answer.category);
+    h += `<div>`;
+    if (answer.category) h += `<span class="rich-cat-badge" style="background:${col}20;color:${col};border:1px solid ${col}40">${esc(answer.category)}</span> `;
+    h += `<span class="rich-amount-sm">৳${Number(answer.amount).toFixed(2)}</span>`;
+    if (answer.description) h += `<div class="rich-subtitle">${esc(answer.description)}</div>`;
+    if (answer.date) h += `<div class="rich-subtitle">${esc(answer.date)}</div>`;
+    h += `</div>`;
+  } else if (t === 'extremum') {
+    const col = _richCatColor(answer.category);
+    h += `<div>${answer.is_max ? '&#x1F7E2;' : '&#x1F534;'} <span class="rich-amount-sm">৳${Number(answer.value).toFixed(2)}</span>`;
+    if (answer.category) h += ` <span class="rich-cat-badge" style="background:${col}20;color:${col};border:1px solid ${col}40">${esc(answer.category)}</span>`;
+    if (answer.description) h += `<div class="rich-subtitle">${esc(answer.description)}</div>`;
+    h += `</div>`;
+  } else if (t === 'average') {
+    h += `<div class="rich-total-hero"><div class="amount">৳${Number(answer.avg).toFixed(2)}</div>`;
+    if (answer.count) h += `<div class="sub">across ${answer.count} day(s)</div>`;
+    h += `</div>`;
+  } else if (t === 'frequency') {
+    const col = _richCatColor(answer.category);
+    h += `<div style="text-align:center;padding:4px 0"><span class="rich-cat-badge" style="background:${col}20;color:${col};border:1px solid ${col}40;font-size:14px;padding:4px 14px">${esc(answer.category)}</span><div style="font-size:22px;font-weight:700;margin:6px 0">${answer.count}</div><div class="rich-subtitle">transaction(s)</div></div>`;
+  } else if (t === 'list') {
+    h += `<div>Found <strong>${answer.count}</strong> result(s)`;
+    if (answer.total) h += ` totaling <span class="rich-highlight-amt">৳${Number(answer.total).toFixed(2)}</span>`;
+    h += `.</div>`;
+  } else if (t === 'text') {
+    h += `<div>${esc(answer.text)}</div>`;
+  } else {
+    // llm or unknown — inline highlight
+    h += highlightInline(answer.text || '');
+  }
+
+  h += '</div>';
+  return h;
+}
+
+function highlightInline(text) {
+  if (!text) return '';
+  let s = esc(text);
+  s = s.replace(/৳([\d,]+\.?\d*)/g, '<span class="rich-highlight-amt">৳$1</span>');
+  s = s.replace(/(\d+) transaction\(s\)/g, '<span class="rich-highlight-num">$1</span> transaction(s)');
+  s = s.replace(/(\d+) day\(s\)/g, '<span class="rich-highlight-num">$1</span> day(s)');
+  return s;
+}
+
 function getWelcomeHtml() {
   let chips = '';
   const pool = cachedSuggestions.length ? cachedSuggestions : FALLBACK_SUGGESTIONS;
@@ -1703,6 +1797,84 @@ function addChatMessage(type, content, sql, data, columns, suggestions) {
   renderChatMessages();
 }
 
+const FOLLOWUP_TEMPLATES = {
+  budget: [
+    { text: 'Which categories are over budget?' },
+    { text: 'Show all budgets' },
+    { text: 'How much on {category} total this month?', show: a => a.category },
+    { text: 'Compare spending on {category} to last month', show: a => a.category },
+  ],
+  pacing: [
+    { text: 'Which categories am I spending most on?' },
+    { text: 'Compare to last month' },
+    { text: 'Show breakdown by category this month' },
+    { text: 'What was my biggest expense this month?' },
+  ],
+  comparison: [
+    { text: 'What changed most between months?' },
+    { text: 'Show breakdown by category for {months.0.label}', show: a => a.months && a.months.length > 0 },
+    { text: 'Show breakdown by category for {months.1.label}', show: a => a.months && a.months.length > 1 },
+    { text: 'View as chart' },
+  ],
+  category_breakdown: [
+    { text: 'Show expenses for {categories.0.name}', show: a => a.categories && a.categories.length > 0 },
+    { text: 'Compare to last month' },
+    { text: 'What changed since last month?' },
+    { text: 'What was my biggest expense this month?' },
+  ],
+  total: [
+    { text: 'Show breakdown by category' },
+    { text: 'Compare to last month' },
+    { text: 'What was my biggest expense?' },
+    { text: 'Show top 5 expenses' },
+  ],
+  expense: [
+    { text: 'Show other expenses on {date}', show: a => a.date },
+    { text: 'How much on {category} total?', show: a => a.category },
+    { text: 'Show all {category} expenses', show: a => a.category },
+    { text: 'Compare to last month' },
+  ],
+  extremum: [
+    { text: 'Show second most expensive' },
+    { text: 'Show all {category} expenses', show: a => a.category },
+    { text: 'Compare to last month' },
+    { text: 'What is my average daily spending?', show: a => a.value > 5000 },
+  ],
+  average: [
+    { text: 'Show breakdown by category' },
+    { text: 'Show top 5 expenses' },
+    { text: 'Compare to last month' },
+  ],
+  frequency: [
+    { text: 'Show all {category} expenses', show: a => a.category },
+    { text: 'How much on {category} total?', show: a => a.category },
+    { text: 'Compare to last month' },
+  ],
+  list: [
+    { text: 'Show breakdown by category' },
+    { text: 'Compare to last month' },
+    { text: 'Show top 5 expenses' },
+  ],
+};
+
+function generateFollowups(answer) {
+  if (!answer || !answer.type) return [];
+  const templates = FOLLOWUP_TEMPLATES[answer.type];
+  if (!templates) return [];
+
+  const valid = [];
+  for (const t of templates) {
+    if (t.show && !t.show(answer)) continue;
+    const text = t.text.replace(/\{(\w+(?:\.\w+)*)\}/g, (_, path) => {
+      const val = path.split('.').reduce((o, k) => o != null ? o[k] : undefined, answer);
+      return val != null ? String(val) : _;
+    });
+    if (valid.indexOf(text) === -1) valid.push(text);
+  }
+
+  return valid.sort(() => Math.random() - 0.5).slice(0, 3);
+}
+
 const FALLBACK_SUGGESTIONS = [
   "How does this week compare to last week?",
   "Show me the breakdown by category",
@@ -1720,7 +1892,6 @@ async function fetchSuggestions() {
     cachedSuggestions = res.data.suggestions;
     return res.data.suggestions;
   }
-  // Fallback to random from static pool
   const shuffled = [...FALLBACK_SUGGESTIONS].sort(() => Math.random() - 0.5);
   cachedSuggestions = shuffled.slice(0, 3);
   return cachedSuggestions;
@@ -1738,7 +1909,7 @@ function renderChatMessages() {
       return `<div class="chat-message user-message"><div class="chat-bubble user-bubble">${esc(msg.content)}</div></div>`;
     }
     if (msg.type === 'ai') {
-      let h = `<div class="chat-message ai-message"><div class="chat-bubble ai-bubble">${esc(msg.content)}`;
+      let h = `<div class="chat-message ai-message"><div class="chat-bubble ai-bubble">${renderRichAnswer(msg.content)}`;
       if (msg.data && msg.data.length) {
         h += renderDataTable(msg.columns, msg.data);
       }
@@ -1880,7 +2051,8 @@ async function sendChatMessage() {
     const history = [];
     for (const m of chatMessages) {
       if (m.type === 'ai' || m.type === 'user') {
-        history.push({ role: m.type, content: m.content });
+        const text = typeof m.content === 'object' && m.content ? (m.content.text || '') : m.content;
+        history.push({ role: m.type, content: text });
       }
     }
 
@@ -1926,8 +2098,12 @@ async function sendChatMessage() {
       return;
     }
 
-    // Q&A response
-    const suggestions = await pickSuggestions(message, d.answer);
+    // Q&A response — generate context-aware follow-ups
+    let suggestions = generateFollowups(d.answer);
+    if (!suggestions.length) {
+      const fallback = await pickSuggestions(message, d.answer);
+      suggestions = fallback.slice(0, 3);
+    }
     addChatMessage('ai', d.answer || 'I found ' + (d.data ? d.data.length : 0) + ' result(s).', d.sql, d.data, d.columns, suggestions);
 
     const body = document.getElementById('aiChatBody');
