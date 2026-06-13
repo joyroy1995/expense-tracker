@@ -1550,6 +1550,136 @@ body {
   color: white;
 }
 
+/* ── Split Preview ── */
+.btn-split {
+  background: none;
+  border: 1px solid var(--primary);
+  color: var(--primary);
+  padding: 4px 12px;
+  border-radius: 16px;
+  font-size: 12px;
+  cursor: pointer;
+  font-family: inherit;
+  transition: background 0.2s, color 0.2s;
+  margin-top: 8px;
+}
+.btn-split:hover {
+  background: var(--primary);
+  color: white;
+}
+
+.split-trigger {
+  text-align: center;
+}
+
+.split-preview-card {
+  margin-top: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.split-preview-rows {
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.split-preview-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+}
+.split-preview-row:last-child {
+  border-bottom: none;
+}
+
+.split-preview-row .split-item-desc {
+  flex: 2;
+  min-width: 0;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 13px;
+  font-family: inherit;
+}
+.split-preview-row .split-item-desc:focus {
+  outline: none;
+  border-color: var(--primary);
+}
+
+.split-preview-row select {
+  flex: 1;
+  min-width: 100px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 13px;
+  font-family: inherit;
+  background: var(--card-bg);
+}
+
+.split-item-amount-wrap {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex: 0 0 110px;
+}
+.split-currency-sign {
+  font-size: 13px;
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+.split-item-amount {
+  width: 90px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 13px;
+  font-family: inherit;
+}
+.split-item-amount:focus {
+  outline: none;
+  border-color: var(--primary);
+}
+
+.split-item-del {
+  background: none;
+  border: none;
+  font-size: 18px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  padding: 0 6px;
+  line-height: 1;
+  opacity: 0.4;
+  transition: opacity 0.2s, color 0.2s;
+}
+.split-item-del:hover {
+  opacity: 1;
+  color: var(--error);
+}
+
+.split-preview-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 12px;
+  border-top: 1px solid var(--border);
+  background: var(--bg);
+}
+
+.split-preview-total {
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--text);
+}
+
+.btn-sm {
+  padding: 6px 12px;
+  font-size: 13px;
+}
+
 
 @media (max-width: 768px) {
     .topbar {

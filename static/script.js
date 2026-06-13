@@ -519,6 +519,8 @@ async function renderHome(page = 1) {
   initChatCard();
 }
 
+const SPLIT_SEPARATORS = /(\s+ar\s+|,|\s+ও\s+|\s+and\s+|\s*\+\s*)/i;
+
 function attachExpenseForm(today) {
   const form = document.getElementById('expenseForm');
   const input = document.getElementById('description');
@@ -527,9 +529,11 @@ function attachExpenseForm(today) {
 
   let predictTimeout;
   let userModifiedPreview = false;
+  let splitMode = false;
 
   input.addEventListener('input', () => {
     clearTimeout(predictTimeout);
+    splitMode = false;
     userModifiedPreview = false;
     const val = input.value.trim();
     if (val.length < 2) { preview.innerHTML = ''; return; }
@@ -537,6 +541,7 @@ function attachExpenseForm(today) {
   });
 
   async function predictExpense(description) {
+    if (preview.querySelector('.split-preview-card')) return;
     const res = await api.post('/api/predict_expense', { description });
     if (!res.ok || !res.data.category) return;
     const data = res.data;
@@ -561,6 +566,14 @@ function attachExpenseForm(today) {
       el.addEventListener('change', () => { userModifiedPreview = true; });
       el.addEventListener('input', () => { userModifiedPreview = true; });
     });
+
+    // Check if description looks splittable
+    if (SPLIT_SEPARATORS.test(description)) {
+      const splitBtn = document.createElement('div');
+      splitBtn.className = 'split-trigger';
+      splitBtn.innerHTML = `<button type="button" class="btn btn-split" onclick="triggerSplit(this)">↔ Split found!</button>`;
+      preview.appendChild(splitBtn);
+    }
   }
 
   function getPreviewValues() {
@@ -578,6 +591,33 @@ function attachExpenseForm(today) {
     btnText.style.display = 'none';
     btnLoader.style.display = 'flex';
 
+    // Bulk submit in split mode (also check DOM in case stray input event reset splitMode)
+    if (splitMode || preview?.querySelector('.split-preview-card')) {
+      const date = document.getElementById('date').value;
+      const splitItems = getSplitItems();
+      if (!splitItems.length) {
+        showToast('No valid items to add', 'error');
+        btn.disabled = false;
+        btnText.style.display = 'inline';
+        btnLoader.style.display = 'none';
+        return;
+      }
+      const res = await api.post('/api/expenses/bulk', { date, items: splitItems });
+      btn.disabled = false;
+      btnText.style.display = 'inline';
+      btnLoader.style.display = 'none';
+      if (!res.ok) { showToast(res.error, 'error'); return; }
+      showToast(res.data.count + ' expenses added!', 'success');
+      form.reset();
+      preview.innerHTML = '';
+      splitMode = false;
+      splitItemsCache = [];
+      userModifiedPreview = false;
+      setTimeout(() => renderHome(), 400);
+      return;
+    }
+
+    // Single expense submit (existing behavior)
     const fd = {
       date: document.getElementById('date').value,
       description: input.value,
@@ -598,6 +638,8 @@ function attachExpenseForm(today) {
     showToast('Expense added!', 'success');
     form.reset();
     preview.innerHTML = '';
+    splitMode = false;
+    splitItemsCache = [];
     userModifiedPreview = false;
 
     if (res.data.date === getTodayStr()) {
@@ -609,8 +651,125 @@ function attachExpenseForm(today) {
   });
 }
 
+
 function getTodayStr() {
   return new Date().toISOString().split('T')[0];
+}
+
+
+// ── Split helpers (global for onclick) ──
+
+let splitItemsCache = [];
+
+async function triggerSplit(btnEl) {
+  const input = document.getElementById('description');
+  if (!input) return;
+  const description = input.value.trim();
+  if (!description) return;
+
+  btnEl.disabled = true;
+  btnEl.textContent = 'Splitting...';
+
+  const res = await api.post('/api/split_expense', { description });
+  if (!res.ok || !res.data.items || res.data.items.length < 2) {
+    showToast('Could not split into multiple items', 'error');
+    btnEl.disabled = false;
+    btnEl.textContent = '↔ Split found!';
+    return;
+  }
+
+  splitItemsCache = res.data.items;
+  renderSplitPreview(res.data.items);
+  splitMode = true;
+}
+
+function renderSplitPreview(items) {
+  const preview = document.getElementById('preview');
+  const submitBtn = document.getElementById('submitBtn');
+  if (!preview) return;
+
+  const total = items.reduce((s, i) => s + (i.amount || 0), 0);
+  let rowsHtml = items.map((item, idx) => renderSplitItemRow(item, idx)).join('');
+
+  preview.innerHTML = `
+    <div class="split-preview-card">
+      <div class="split-preview-rows" id="splitRows">
+        ${rowsHtml}
+      </div>
+      <div class="split-preview-footer">
+        <span class="split-preview-total">Total: ৳${total.toFixed(2)}</span>
+        <button type="button" class="btn btn-danger btn-sm" onclick="cancelSplit()">Cancel</button>
+      </div>
+    </div>`;
+
+  if (submitBtn) {
+    submitBtn.querySelector('.btn-text').textContent = `Add All (${items.length})`;
+  }
+}
+
+function renderSplitItemRow(item, idx) {
+  const descSafe = item.description.replace(/'/g, "\\'");
+  return `
+    <div class="split-preview-row" data-idx="${idx}">
+      <input type="text" class="split-item-desc" value="${esc(item.description)}"
+             onchange="updateSplitItem(${idx},'desc',this.value)"
+             placeholder="Description">
+      <select class="split-item-cat" onchange="updateSplitItem(${idx},'cat',this.value)">
+        ${buildCategoryOptions(item.category)}
+      </select>
+      <div class="split-item-amount-wrap">
+        <span class="split-currency-sign">৳</span>
+        <input type="number" class="split-item-amount" step="0.01" min="0" value="${item.amount.toFixed(2)}"
+               onchange="updateSplitItem(${idx},'amt',parseFloat(this.value)||0)">
+      </div>
+      <button type="button" class="split-item-del" onclick="removeSplitItem(${idx})">&times;</button>
+    </div>`;
+}
+
+function updateSplitItem(idx, field, value) {
+  if (!splitItemsCache[idx]) return;
+  if (field === 'desc') splitItemsCache[idx].description = value;
+  else if (field === 'cat') splitItemsCache[idx].category = value;
+  else if (field === 'amt') splitItemsCache[idx].amount = value;
+  updateSplitTotal();
+}
+
+function removeSplitItem(idx) {
+  splitItemsCache.splice(idx, 1);
+  if (splitItemsCache.length < 2) {
+    cancelSplit();
+    return;
+  }
+  const container = document.getElementById('splitRows');
+  if (container) {
+    container.innerHTML = splitItemsCache.map((item, i) => renderSplitItemRow(item, i)).join('');
+  }
+  updateSplitTotal();
+  const submitBtn = document.getElementById('submitBtn');
+  if (submitBtn) {
+    submitBtn.querySelector('.btn-text').textContent = `Add All (${splitItemsCache.length})`;
+  }
+}
+
+function updateSplitTotal() {
+  const footer = document.querySelector('.split-preview-footer');
+  if (!footer) return;
+  const total = splitItemsCache.reduce((s, i) => s + (i.amount || 0), 0);
+  const el = footer.querySelector('.split-preview-total');
+  if (el) el.textContent = `Total: ৳${total.toFixed(2)}`;
+}
+
+function cancelSplit() {
+  splitMode = false;
+  splitItemsCache = [];
+  const preview = document.getElementById('preview');
+  if (preview) preview.innerHTML = '';
+  const submitBtn = document.getElementById('submitBtn');
+  if (submitBtn) submitBtn.querySelector('.btn-text').textContent = 'Add Expense';
+}
+
+function getSplitItems() {
+  return splitItemsCache.filter(i => i.description.trim() && i.amount > 0);
 }
 
 function addExpenseToList(expense) {
@@ -1172,14 +1331,16 @@ function renderChatMessages() {
 
 function renderDataTable(columns, data) {
   if (!columns || !columns.length || !data || !data.length) return '';
+  const visibleCols = columns.filter(c => c.toLowerCase() !== 'id');
+  if (!visibleCols.length) return '';
   const maxRows = 10;
   const rows = data.slice(0, maxRows);
   let h = '<div class="chat-data-table"><table><thead><tr>';
-  columns.forEach(c => { h += `<th>${esc(c)}</th>`; });
+  visibleCols.forEach(c => { h += `<th>${esc(c)}</th>`; });
   h += '</tr></thead><tbody>';
   rows.forEach(r => {
     h += '<tr>';
-    columns.forEach(c => {
+    visibleCols.forEach(c => {
       let v = r[c];
       if (typeof v === 'number') {
         v = c.toLowerCase().includes('amount') || c === 'total' ? `৳${v.toFixed(2)}` : v;

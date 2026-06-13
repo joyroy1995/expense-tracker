@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 from werkzeug.security import generate_password_hash, check_password_hash
 import re
 import database as db
-from llm_service import extract_expense, predict_expense, extract_keywords, generate_sql, answer_from_results
+from llm_service import extract_expense, predict_expense, extract_keywords, generate_sql, answer_from_results, format_answer, split_expenses, _clean_split_desc
 from config import USERNAME, PASSWORD, SECRET_KEY, CATEGORY_COLORS, TIMEZONE, SEED_CATEGORIES
 
 app = Flask(__name__)
@@ -352,6 +352,36 @@ def api_learn():
     return jsonify({"success": True})
 
 
+# ── NL Q&A schema cache ──────────────────────────────────
+_schema_cache = None
+_schema_cache_time = 0
+import time as _time
+
+def _get_schema_cached():
+    global _schema_cache, _schema_cache_time
+    now = _time.time()
+    if _schema_cache and now - _schema_cache_time < 300:
+        return _schema_cache
+    _schema_cache = db.get_schema()
+    _schema_cache_time = now
+    return _schema_cache
+
+COMPLEX_KEYWORDS = [
+    "compare", "comparison", "difference", "vs ", "versus",
+    "trend", "pattern",
+    "unusual", "abnormal", "unexpected", "strange",
+    "why", "because", "reason",
+    "recommend", "suggestion", "tip", "advice",
+    "insight", "summarize", "summary", "overview",
+    "improve", "save", "reduce", "cut",
+    "increased", "decreased", "rose", "fell",
+]
+
+def _needs_llm_answer(question):
+    q = question.lower()
+    return any(kw in q for kw in COMPLEX_KEYWORDS)
+
+
 # ── NL Q&A ──────────────────────────────────────────────────
 
 @app.route("/api/ask", methods=["POST"])
@@ -364,11 +394,11 @@ def api_ask():
 
     history = data.get("history", [])
 
-    schema = db.get_schema()
+    schema = _get_schema_cached()
     current_date = datetime.now(TIMEZONE).strftime("%B %d, %Y")
     question_with_context = f"Today is {current_date}.\n\nQuestion: {question}"
 
-    sql = generate_sql(question_with_context, schema, history=history)
+    sql = generate_sql(question_with_context, schema)
     if not sql:
         return jsonify({"error": "Could not generate SQL query. Check API key."}), 500
 
@@ -382,21 +412,78 @@ def api_ask():
         result = conn.execute(db.text(sql), {"uid": session["user_id"]})
         columns = list(result.keys()) if result.returns_rows else []
         rows = result.fetchmany(50)
-        data = [dict(r._mapping) for r in rows]
+        rows_data = [dict(r._mapping) for r in rows]
     except Exception as e:
         return jsonify({"error": f"Query execution failed: {str(e)}", "sql": sql}), 500
 
-    answer = answer_from_results(question, sql, data[:20], history=history)
-    if not answer:
-        total = len(data)
-        answer = f"I found {total} result(s) based on your data. Check the data above for details."
+    # Use programmatic answer for simple queries, LLM only for complex ones
+    if _needs_llm_answer(question):
+        answer = answer_from_results(question, sql, rows_data[:20], history=history)
+        if not answer:
+            answer = format_answer(columns, rows_data, question)
+    else:
+        answer = format_answer(columns, rows_data, question)
 
     return jsonify({
         "answer": answer,
         "sql": sql,
-        "data": data[:50],
+        "data": rows_data[:50],
         "columns": columns,
     })
+
+
+# ── Expense Splitting ──────────────────────────────────────
+
+@app.route("/api/split_expense", methods=["POST"])
+@login_required
+def api_split_expense():
+    data = request.get_json()
+    description = data.get("description", "").strip()
+    if len(description) < 2:
+        return jsonify({"error": "Description required"}), 400
+
+    items = split_expenses(description)
+    if not items or len(items) < 2:
+        return jsonify({"items": None, "message": "Could not split into multiple items"})
+
+    learned = db.get_learned_categories(session["user_id"])
+    for item in items:
+        item["color"] = CATEGORY_COLORS.get(item["category"], "#6b7280")
+    return jsonify({"items": items})
+
+
+@app.route("/api/expenses/bulk", methods=["POST"])
+@login_required
+def api_expenses_bulk():
+    data = request.get_json()
+    date = data.get("date", datetime.now(TIMEZONE).strftime("%Y-%m-%d"))
+    items = data.get("items", [])
+    if not items:
+        return jsonify({"error": "No items provided"}), 400
+
+    saved = []
+    for item in items:
+        desc = item.get("description", "").strip()
+        category = item.get("category", "").strip()
+        amount = float(item.get("amount", 0))
+        if not desc or amount <= 0:
+            continue
+
+        # Auto-learn from confirmed split items
+        for kw in extract_keywords(desc):
+            db.learn_category(session["user_id"], kw, category)
+
+        expense_id = db.add_expense(date, desc, amount, category, user_id=session["user_id"])
+        saved.append({
+            "id": expense_id,
+            "date": date,
+            "description": desc,
+            "amount": amount,
+            "category": category,
+            "color": CATEGORY_COLORS.get(category, "#6b7280"),
+        })
+
+    return jsonify({"count": len(saved), "expenses": saved})
 
 
 # ── Existing API routes (unchanged) ────────────────────────
@@ -410,6 +497,9 @@ def api_add_expense():
 
     if not description:
         return jsonify({"error": "Description required"}), 400
+
+    # Clean description: strip trailing monetary amounts, keep quantity modifiers (1 kg, 2 ta, etc.)
+    clean_desc = _clean_split_desc(description) or description
 
     category = data.get("category")
     amount = data.get("amount")
@@ -426,16 +516,16 @@ def api_add_expense():
 
     # Learn from user-corrected predictions
     if data.get("learn"):
-        for kw in extract_keywords(description):
+        for kw in extract_keywords(clean_desc):
             db.learn_category(session["user_id"], kw, category)
 
-    expense_id = db.add_expense(date, description, amount, category, user_id=session["user_id"])
+    expense_id = db.add_expense(date, clean_desc, amount, category, user_id=session["user_id"])
 
     return jsonify(
         {
             "id": expense_id,
             "date": date,
-            "description": description,
+            "description": clean_desc,
             "amount": amount,
             "category": category,
             "color": CATEGORY_COLORS.get(category, "#6b7280"),

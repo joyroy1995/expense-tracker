@@ -245,42 +245,31 @@ def _fmt_history(history):
 SQL_PROMPT = """You are a SQL query generator for a personal expense tracker. Given a user's natural language question, generate a SQL query to answer it.
 
 Database schema:
-{schema}{history}
+{schema}
 
 Rules:
 1. Return ONLY the SQL query — no explanation, no markdown formatting, no backticks.
 2. Use ONLY SELECT queries.
 3. Always include "user_id = :uid" in the WHERE clause.
-4. Use SQLite-compatible syntax (works with both SQLite and PostgreSQL).
+4. Use SQLite-compatible syntax.
 5. For date filtering use LIKE: date LIKE '2026-06%'
-6. For extracting year/month use SUBSTR(date, 1, 4) for year, SUBSTR(date, 1, 7) for year-month.
-7. Do NOT use date(), strftime(), EXTRACT(), or other date functions.
-8. Column names: id, date, description, amount, category, user_id, created_at
-9. Use COALESCE for safe SUM.
-10. Limit results to 50 rows max.
-11. Use single quotes for strings.
+6. Use SUBSTR(date, 1, 4) for year, SUBSTR(date, 1, 7) for year-month.
+7. Column names: id, date, description, amount, category, user_id, created_at
+8. Use COALESCE for safe SUM.
+9. Limit results to 50 rows max.
+10. Use single quotes for strings.
 
 Examples:
-Question: How much did I spend on chira this month?
-SQL: SELECT SUM(amount) as total, COUNT(*) as count FROM expenses WHERE user_id = :uid AND description LIKE '%chira%' AND date LIKE '2026-06%'
+Q: How much on Transport this month?
+SQL: SELECT SUM(amount) as total, COUNT(*) as count FROM expenses WHERE user_id = :uid AND category = 'Transport' AND date LIKE '2026-06%'
 
-Question: What was my biggest expense last week?
-SQL: SELECT description, amount, date, category FROM expenses WHERE user_id = :uid AND date >= '2026-06-07' AND date <= '2026-06-13' ORDER BY amount DESC LIMIT 1
-
-Question: Show me all Dining Out expenses from June
+Q: Show all Dining Out expenses from June
 SQL: SELECT date, description, amount FROM expenses WHERE user_id = :uid AND category = 'Dining Out' AND date LIKE '2026-06%' ORDER BY date
 
-Question: What's my total spending on Transport this year?
-SQL: SELECT SUM(amount) as total FROM expenses WHERE user_id = :uid AND category = 'Transport' AND date LIKE '2026-%'
-
-Question: How many expenses did I have last month?
-SQL: SELECT COUNT(*) as count FROM expenses WHERE user_id = :uid AND date LIKE '2026-05%'
-
-Question: What categories did I spend money on in June?
+Q: What categories did I spend on in June?
 SQL: SELECT category, SUM(amount) as total, COUNT(*) as count FROM expenses WHERE user_id = :uid AND date LIKE '2026-06%' GROUP BY category ORDER BY total DESC
 
-Question: {question}
-
+Q: {question}
 SQL:"""
 
 
@@ -301,11 +290,10 @@ Rules:
 Answer:"""
 
 
-def generate_sql(question, schema, history=None):
+def generate_sql(question, schema):
     if not _has_api_key():
         return None
-    hist_text = _fmt_history(history)
-    prompt = SQL_PROMPT.format(schema=schema, question=question, history=hist_text)
+    prompt = SQL_PROMPT.format(schema=schema, question=question)
     try:
         client = _get_client()
         response = client.chat.completions.create(
@@ -343,5 +331,134 @@ def answer_from_results(question, sql, results, history=None):
             temperature=0.1,
         )
         return response.choices[0].message.content.strip()
+    except Exception:
+        return None
+
+
+def format_answer(columns, data, question):
+    """Generate natural language answer from query results without an LLM call."""
+    if not data:
+        return "No expenses found matching your question."
+
+    c_lower = [c.lower() for c in columns]
+    amt_col = next((c for c in columns if c.lower() in ("total", "amount", "sum")), None)
+    cnt_col = next((c for c in columns if c.lower() in ("count", "cnt")), None)
+    cat_col = next((c for c in columns if c.lower() == "category"), None)
+    desc_col = next((c for c in columns if c.lower() in ("description", "desc")), None)
+    date_col = next((c for c in columns if c.lower() == "date"), None)
+
+    # Single row aggregate (SUM, COUNT, etc.)
+    if len(data) == 1 and not cat_col:
+        row = data[0]
+        total = row.get(amt_col) if amt_col else None
+        count = row.get(cnt_col) if cnt_col else None
+        if total is not None and count is not None:
+            return f"Your total is ৳{float(total):.2f} across {int(count)} transaction(s)."
+        if total is not None:
+            return f"Your total is ৳{float(total):.2f}."
+        if count is not None:
+            return f"That's {int(count)} transaction(s)."
+
+    # Single result with description (detail query)
+    if len(data) == 1 and desc_col and amt_col:
+        row = data[0]
+        desc = row.get(desc_col, "")
+        amt = float(row.get(amt_col, 0))
+        date_val = row.get(date_col, "") if date_col else ""
+        base = f"৳{amt:.2f} for \"{desc}\""
+        if date_val:
+            base += f" on {date_val}"
+        return f"It was {base}."
+
+    # Category breakdown
+    if cat_col and amt_col:
+        total = sum(float(r.get(amt_col, 0)) for r in data)
+        top = max(data, key=lambda r: float(r.get(amt_col, 0)))
+        return f"Total: ৳{total:.2f} across {len(data)} categories. Most spent on {top[cat_col]} (৳{float(top[amt_col]):.2f})."
+
+    # General list
+    total = sum(float(r.get(amt_col, 0)) for r in data) if amt_col else 0
+    info = f" totaling ৳{total:.2f}" if amt_col else ""
+    return f"Found {len(data)} result(s){info}."
+
+
+# ── Expense Splitting ──────────────────────────────────────────
+
+SPLIT_PROMPT = f"""You are an expense splitter for a Bangladeshi user. Given a description containing multiple purchases, split it into individual items. Each item gets its own description, category, and amount.
+
+Categories: {CATEGORIES_STR}
+
+Rules:
+- Split on separators: comma, "ar", "ও", "and", "+"
+- Description must NOT contain the amount, "taka", "tk", "৳", or "টাকা"
+- Description should be the item name only, but KEEP quantity modifiers (1 kg, 2 ta, 1 ltr, etc.)
+- Amount must be a number only (no currency text)
+- If the text is a single purchase, return it as one item
+- If amount is missing from an item, split the total proportionally or set to 0
+
+Examples:
+Input: gorur mangsho 500 ar mach 300, rickshaw 50
+Output: [{{"description":"gorur mangsho","category":"Groceries","amount":500}},
+         {{"description":"mach","category":"Groceries","amount":300}},
+         {{"description":"rickshaw","category":"Transport","amount":50}}]
+
+Input: 1 kg gorur mangsho 600 tk ar 2 ta dim 30 taka
+Output: [{{"description":"1 kg gorur mangsho","category":"Groceries","amount":600}},
+         {{"description":"2 ta dim","category":"Groceries","amount":30}}]
+
+Input: bazar korlam 1500
+Output: [{{"description":"bazar korlam","category":"Groceries","amount":1500}}]
+
+Input: rickshaw 30 ar bus 20 ar lunch 150
+Output: [{{"description":"rickshaw","category":"Transport","amount":30}},
+         {{"description":"bus","category":"Transport","amount":20}},
+         {{"description":"lunch","category":"Dining Out","amount":150}}]
+
+Return ONLY a valid JSON array. No explanation."""
+
+
+def _clean_split_desc(desc):
+    """Strip trailing monetary amount/currency from a split item description."""
+    d = desc.strip()
+    d = re.sub(r'\b\d+(?:\.\d+)?\s*(?:taka|tk|৳|টাকা)\s*$', '', d, flags=re.IGNORECASE).strip()
+    d = re.sub(r'\b(?:taka|tk|৳|টাকা)\s*\d+(?:\.\d+)?\s*$', '', d, flags=re.IGNORECASE).strip()
+    d = re.sub(r'\s*\d+(?:\.\d+)?\s*$', '', d).strip()
+    return d
+
+
+def split_expenses(description):
+    """Split a multi-item expense description into individual items."""
+    if not _has_api_key():
+        return None
+    try:
+        client = _get_client()
+        response = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[
+                {"role": "system", "content": "You are an expense splitter. Return only a JSON array."},
+                {"role": "user", "content": f"{SPLIT_PROMPT}\n\nInput: {description}\nOutput:"},
+            ],
+            temperature=0.1,
+        )
+        text = response.choices[0].message.content.strip().strip("```").strip()
+        if text.startswith("json"):
+            text = text[4:].strip()
+        items = json.loads(text)
+        if not isinstance(items, list):
+            return None
+        for item in items:
+            item["description"] = _clean_split_desc(item.get("description", ""))
+            item["amount"] = float(item.get("amount", 0))
+            cat = item.get("category", "Other")
+            if cat not in CATEGORIES:
+                for c in CATEGORIES:
+                    if c.lower() in cat.lower():
+                        cat = c
+                        break
+                else:
+                    cat = "Other"
+            item["category"] = cat
+        # Leave single-item results as-is (caller decides if split is useful)
+        return items
     except Exception:
         return None
