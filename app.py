@@ -6,6 +6,7 @@ import re
 import random
 import database as db
 from llm_service import extract_expense, predict_expense, extract_keywords, generate_sql, correct_sql, answer_from_results, format_answer, split_expenses, _clean_split_desc, extract_date_reference, clean_date_refs, detect_budget_intent, is_question, transcribe_audio, decompose_question, compose_answers
+from database import _ALL_CATEGORIES
 from config import USERNAME, PASSWORD, SECRET_KEY, CATEGORY_COLORS, TIMEZONE, SEED_CATEGORIES
 
 app = Flask(__name__)
@@ -96,6 +97,28 @@ def _ensure_user_filter(sql):
     if "WHERE" in prefix:
         return sql[:insert_pos] + " AND user_id = :uid " + sql[insert_pos:]
     return sql[:insert_pos] + " WHERE user_id = :uid " + sql[insert_pos:]
+
+
+def _fix_category_in_sql(sql, question):
+    """Post-process generated SQL to fix wrong category filters."""
+    question_lower = question.lower()
+    mentioned = None
+    for cat in sorted(_ALL_CATEGORIES, key=len, reverse=True):
+        if cat.lower() in question_lower:
+            mentioned = cat
+            break
+    if not mentioned:
+        return sql
+    m = re.search(r"(?:b\.)?category\s*=\s*'([^']+)'", sql)
+    if not m:
+        return sql
+    sql_cat = m.group(1)
+    if sql_cat == mentioned or sql_cat == "__overall__":
+        return sql
+    sql = sql.replace(f"category = '{sql_cat}'", f"category = '{mentioned}'", 1)
+    # Also fix b.category if present
+    sql = sql.replace(f"b.category = '{sql_cat}'", f"b.category = '{mentioned}'", 1)
+    return sql
 
 
 # ── API: Auth ──────────────────────────────────────────────
@@ -401,6 +424,7 @@ def _run_qa_pipeline(question, question_with_context, schema, history, uid, forc
         return {"error": "Generated query is not a valid SELECT statement", "sql": sql}
 
     sql = _ensure_user_filter(sql)
+    sql = _fix_category_in_sql(sql, question)
 
     try:
         conn = db.get_connection()
@@ -412,6 +436,7 @@ def _run_qa_pipeline(question, question_with_context, schema, history, uid, forc
         corrected = correct_sql(sql, str(e), schema, question_with_context)
         if corrected and _validate_sql(corrected):
             corrected = _ensure_user_filter(corrected)
+            corrected = _fix_category_in_sql(corrected, question)
             try:
                 conn2 = db.get_connection()
                 result = conn2.execute(db.text(corrected), {"uid": uid})
