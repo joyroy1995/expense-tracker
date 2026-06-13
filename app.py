@@ -137,7 +137,7 @@ def _fix_sort_order(sql, question):
         pos = rest.find(kw)
         if pos != -1 and (idx + 9 + pos) < insert_pos:
             insert_pos = idx + 9 + pos
-    return sql[:insert_pos] + ' DESC' + sql[insert_pos:]
+    return sql[:insert_pos] + ' DESC ' + sql[insert_pos:].lstrip()
 
 
 # ── API: Auth ──────────────────────────────────────────────
