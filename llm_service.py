@@ -150,9 +150,13 @@ def keyword_category(description):
     return "Other"
 
 
+_EXCLUDE_KEYWORDS = {"taka", "tk", "টাকা", "৳", "bdt"}
+
 def extract_keywords(description):
     words = re.sub(r'[^\w\s]', '', description.lower()).split()
-    return [w for w in words if len(w) >= 2]
+    return [w for w in words if len(w) >= 2
+            and not w.isdigit()
+            and w not in _EXCLUDE_KEYWORDS]
 
 
 def check_learned(description, learned_dict=None):
