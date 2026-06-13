@@ -1917,7 +1917,7 @@ function renderChatMessages() {
         h += `<div class="chat-sql-toggle" onclick="this.nextElementSibling.classList.toggle('chat-sql-visible')">Show SQL</div>`;
         h += `<pre class="chat-sql-block">${esc(msg.sql)}</pre>`;
       }
-      h += `</div></div>`;
+      h += `</div>`;
       if (msg.suggestions && msg.suggestions.length) {
         h += `<div class="chat-suggestion-chips">`;
         msg.suggestions.forEach(s => {
@@ -1926,6 +1926,7 @@ function renderChatMessages() {
         });
         h += `</div>`;
       }
+      h += `</div>`;
       return h;
     }
     if (msg.type === 'expense_preview') {

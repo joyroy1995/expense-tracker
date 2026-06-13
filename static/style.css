@@ -1466,7 +1466,8 @@ body {
 }
 
 .ai-message {
-  justify-content: flex-start;
+  flex-direction: column;
+  align-items: flex-start;
 }
 
 .chat-bubble {
@@ -1803,7 +1804,7 @@ body {
   flex-wrap: wrap;
   gap: 6px;
   margin-top: 6px;
-  margin-left: 16px;
+  width: 100%;
 }
 .chat-suggestion-chip {
   background: var(--primary-light);
@@ -1999,13 +2000,14 @@ body {
         opacity: 1;
     }
 
-    .chat-suggestion-chip {
-        padding: 3px 8px;
-        font-size: 11px;
-    }
     .chat-suggestion-chips {
         gap: 4px;
         margin-top: 4px;
+        padding: 0 16px;
+    }
+    .chat-suggestion-chip {
+        padding: 4px 10px;
+        font-size: 11px;
     }
     .welcome-bubble {
         font-size: 12px;
