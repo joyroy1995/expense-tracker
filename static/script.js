@@ -457,6 +457,25 @@ async function renderHome(page = 1) {
       </div>
     </div>
 
+    <div class="card ai-chat-card" id="aiChatCard">
+      <div class="card-header-row" id="aiChatToggle" style="cursor:pointer;">
+        <h2 class="card-title" style="margin-bottom:0;">
+          <span class="ai-icon">🤖</span> Ask AI
+        </h2>
+        <div class="card-header-actions" style="display:flex;align-items:center;gap:8px;">
+          <button class="chat-clear-btn" id="chatClearBtn" title="Clear chat">&times;</button>
+          <span class="collapse-icon" id="aiChatCollapseIcon">▼</span>
+        </div>
+      </div>
+      <div id="aiChatBody" class="chat-body">
+        <div class="chat-messages" id="chatMessages"></div>
+        <div class="chat-input-area">
+          <input type="text" id="chatInput" placeholder="Ask a question..." autocomplete="off">
+          <button id="chatSendBtn" class="btn btn-primary" onclick="sendChatMessage()">Send</button>
+        </div>
+      </div>
+    </div>
+
     <div class="main-grid">
       <div class="card add-expense-card">
         <h2 class="card-title">Add Expense</h2>
@@ -484,25 +503,6 @@ async function renderHome(page = 1) {
       <div class="card today-card">
         <h2 class="card-title">Today's Expenses</h2>
         <div id="todayExpenses" class="expense-list">${todayHtml}</div>
-      </div>
-    </div>
-
-    <div class="card ai-chat-card" id="aiChatCard">
-      <div class="card-header-row" id="aiChatToggle" style="cursor:pointer;">
-        <h2 class="card-title" style="margin-bottom:0;">
-          <span class="ai-icon">🤖</span> Ask AI
-        </h2>
-        <div class="card-header-actions" style="display:flex;align-items:center;gap:8px;">
-          <button class="chat-clear-btn" id="chatClearBtn" title="Clear chat">&times;</button>
-          <span class="collapse-icon" id="aiChatCollapseIcon">▼</span>
-        </div>
-      </div>
-      <div id="aiChatBody" class="chat-body">
-        <div class="chat-messages" id="chatMessages"></div>
-        <div class="chat-input-area">
-          <input type="text" id="chatInput" placeholder="Ask a question..." autocomplete="off">
-          <button id="chatSendBtn" class="btn btn-primary" onclick="sendChatMessage()">Send</button>
-        </div>
       </div>
     </div>
 
@@ -1334,10 +1334,16 @@ function renderChatMessages() {
       const headerDate = msg.date && msg.date !== new Date().toISOString().slice(0, 10) ? ` for ${msg.date}` : '';
       h += `<div class="chat-expense-header">I found these expenses${headerDate}:</div>`;
       h += `<div class="chat-expense-list">`;
-      items.forEach(i => {
+      items.forEach((i, itemIdx) => {
         const col = i.color || '#6b7280';
+        const catOptions = (window.categoryColors ? Object.keys(window.categoryColors) : []).map(c =>
+          `<option value="${c}" ${c === i.category ? 'selected' : ''}>${c}</option>`
+        ).join('');
         h += `<div class="chat-expense-item">
-          <span class="category-badge" style="background-color:${col}">${esc(i.category)}</span>
+          <select class="chat-category-select" style="border-color:${col}40;background-color:${col}20;color:${col}"
+            onchange="updateChatItemCategory(${idx}, ${itemIdx}, this.value)">
+            ${catOptions}
+          </select>
           <span class="chat-expense-desc">${esc(i.description || '')}</span>
           <span class="chat-expense-amt">৳${(i.amount || 0).toFixed(2)}</span>
         </div>`;
@@ -1443,6 +1449,13 @@ async function sendChatMessage() {
     if (icon) icon.textContent = '▼';
     localStorage.setItem('aiChatCollapsed', 'false');
   }
+}
+
+function updateChatItemCategory(msgIdx, itemIdx, newCategory) {
+  const msg = chatMessages[msgIdx];
+  if (!msg || msg.type !== 'expense_preview' || !msg.items[itemIdx]) return;
+  msg.items[itemIdx].category = newCategory;
+  msg.items[itemIdx].color = (window.categoryColors || {})[newCategory] || '#6b7280';
 }
 
 async function confirmChatExpenses(index) {

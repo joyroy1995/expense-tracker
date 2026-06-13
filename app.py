@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 from werkzeug.security import generate_password_hash, check_password_hash
 import re
 import database as db
-from llm_service import extract_expense, predict_expense, extract_keywords, generate_sql, answer_from_results, format_answer, split_expenses, _clean_split_desc, extract_date_reference
+from llm_service import extract_expense, predict_expense, extract_keywords, generate_sql, answer_from_results, format_answer, split_expenses, _clean_split_desc, extract_date_reference, clean_date_refs
 from config import USERNAME, PASSWORD, SECRET_KEY, CATEGORY_COLORS, TIMEZONE, SEED_CATEGORIES
 
 app = Flask(__name__)
@@ -453,6 +453,7 @@ def api_chat():
     items = split_expenses(cleaned_message)
     if items and all(item.get("amount", 0) > 0 for item in items):
         for item in items:
+            item["description"] = clean_date_refs(item.get("description", ""))
             item["color"] = CATEGORY_COLORS.get(item["category"], "#6b7280")
         return jsonify({"type": "expense", "date": expense_date, "items": items})
 
@@ -464,7 +465,7 @@ def api_chat():
             "type": "expense",
             "date": expense_date,
             "items": [{
-                "description": _clean_split_desc(cleaned_message) or cleaned_message,
+                "description": clean_date_refs(_clean_split_desc(cleaned_message) or cleaned_message),
                 "category": cat,
                 "amount": prediction["amount"],
                 "color": CATEGORY_COLORS.get(cat, "#6b7280"),
@@ -541,7 +542,7 @@ def api_expenses_bulk():
 
     saved = []
     for item in items:
-        desc = item.get("description", "").strip()
+        desc = clean_date_refs(item.get("description", "")).strip()
         category = item.get("category", "").strip()
         amount = float(item.get("amount", 0))
         if not desc or amount <= 0:

@@ -476,42 +476,120 @@ def extract_date_reference(text, now):
             d = _try_date(year or today.year, month, day)
             if d: return _sub_and_return(m.group(0), '', d)
 
-    # ── "day before yesterday" / পরশু / "goto parshu" ──
-    if re.search(r'day before yesterday|goto\s+parshu|গত পরশু|পরশু', cleaned, re.IGNORECASE):
+    # ── "the day before yesterday" / "পরশু" / "parshu" / "goto parshu" / "parshudin" ──
+    if re.search(r'(?:the\s+)?day\s+before\s+yesterday|\bparshu\b|goto\s+parshu|গত পরশু|পরশুদিন|পরশু', cleaned, re.IGNORECASE):
         d = today - timedelta(days=2)
-        return _sub_and_return(r'day before yesterday|goto\s+parshu|গত পরশু|পরশু', '', d)
+        return _sub_and_return(r'(?:the\s+)?day\s+before\s+yesterday|\bparshu\b|goto\s+parshu|গত পরশু|পরশুদিন|পরশু', '', d)
 
-    # ── "yesterday" / "last night" / kalke / goto kalke / গতকাল / কাল ──
-    if re.search(r'\byesterday\b|\blast\s+(?:night|evening|morning|afternoon)\b|\bgoto\s+kalke\b|গতকাল|কাল(?!\s*দুপুর)', cleaned, re.IGNORECASE):
+    # ── "the night before" / "previous day" / "previous night" ──
+    if re.search(r'the\s+night\s+before|previous\s+day|previous\s+night', cleaned, re.IGNORECASE):
         d = today - timedelta(days=1)
-        return _sub_and_return(r'\byesterday\b|\blast\s+(?:night|evening|morning|afternoon)\b|\bgoto\s+kalke\b|গতকাল|কাল(?!\s*দুপুর)', '', d)
+        return _sub_and_return(r'the\s+night\s+before|previous\s+day|previous\s+night', '', d)
 
-    # ── "last week" / goto shoptaho / গত সপ্তাহে ──
-    if re.search(r'last\s+week|goto\s+(?:shoptaho|shopta)|গত\s+সপ্তাহে', cleaned, re.IGNORECASE):
+    # ── "yesterday" / "last day/date/night/evening/morning/afternoon" / "kalke" / "goto kalke" / "গতকাল" / "কাল" / "গত রাতে" / "goto rate" / "গত সকালে" / "goto shakale" / "গত দুপুরে" / "goto dupure" / "গত বিকেলে" / "goto bikele" ──
+    if re.search(r'\byesterday\b|\blast\s+(?:day|date|night|evening|morning|afternoon)\b|\bkalke\b|\bgoto\s+kalke\b|গতকাল|কাল(?!\s*দুপুর)|গত\s+রাতে|goto\s+rate|গত\s+সকালে|goto\s+shakale|গত\s+দুপুরে|goto\s+dupure|গত\s+বিকেলে|goto\s+bikele', cleaned, re.IGNORECASE):
+        d = today - timedelta(days=1)
+        return _sub_and_return(r'\byesterday\b|\blast\s+(?:day|date|night|evening|morning|afternoon)\b|\bkalke\b|\bgoto\s+kalke\b|গতকাল|কাল(?!\s*দুপুর)|গত\s+রাতে|goto\s+rate|গত\s+সকালে|goto\s+shakale|গত\s+দুপুরে|goto\s+dupure|গত\s+বিকেলে|goto\s+bikele', '', d)
+
+    # ── "today" / "this morning/afternoon/evening" / "tonight" / "earlier today" / "aaj" / "aj" / "ajke" / "আজ" / "আজকে" / "ai rate" / "ei rate" / "ai shakale" / "ei shakale" ──
+    if re.search(r'\btoday\b|\btonight\b|this\s+(?:morning|afternoon|evening)|earlier\s+today|\baaj\b|\baj(?:ke)?\b|আজ(?:কে)?|ai\s+rate|ei\s+rate|ai\s+shakale|ei\s+shakale', cleaned, re.IGNORECASE):
+        d = today
+        return _sub_and_return(r'\btoday\b|\btonight\b|this\s+(?:morning|afternoon|evening)|earlier\s+today|\baaj\b|\baj(?:ke)?\b|আজ(?:কে)?|ai\s+rate|ei\s+rate|ai\s+shakale|ei\s+shakale', '', d)
+
+    # ── "this week" / "this month" / "ei shoptaho/shopta" / "ei mashe/mash" / "এই সপ্তাহে" / "এই মাসে" ──
+    m = re.search(r'this\s+week|ei\s+(?:shoptaho|shopta|shoptah)|এই\s+সপ্তাহে', cleaned, re.IGNORECASE)
+    if m:
+        d = today - timedelta(days=today.weekday())  # go back to Monday
+        return _sub_and_return(m.re.pattern, '', d)
+    m = re.search(r'this\s+month|ei\s+(?:mashe|mash)|এই\s+মাসে', cleaned, re.IGNORECASE)
+    if m:
+        d = today.replace(day=1)
+        return _sub_and_return(m.re.pattern, '', d)
+
+    # ── "last week" / "goto shoptaho/shopta" / "গত সপ্তাহে" / "shesh shoptaho/shopta" / "শেষ সপ্তাহে" ──
+    if re.search(r'last\s+week|goto\s+(?:shoptaho|shopta)|গত\s+সপ্তাহে|shesh\s+(?:shoptaho|shopta|shoptah)|শেষ\s+সপ্তাহে', cleaned, re.IGNORECASE):
         d = today - timedelta(days=7)
-        return _sub_and_return(r'last\s+week|goto\s+(?:shoptaho|shopta)|গত\s+সপ্তাহে', '', d)
+        return _sub_and_return(r'last\s+week|goto\s+(?:shoptaho|shopta)|গত\s+সপ্তাহে|shesh\s+(?:shoptaho|shopta|shoptah)|শেষ\s+সপ্তাহে', '', d)
 
-    # ── "last month" / goto mash / গত মাসে ──
-    if re.search(r'last\s+month|goto\s+mash|গত\s+মাসে', cleaned, re.IGNORECASE):
+    # ── "last month" / "goto mash" / "গত মাসে" / "shesh mashe/mash" / "শেষ মাসে" ──
+    if re.search(r'last\s+month|goto\s+mash|গত\s+মাসে|shesh\s+(?:mashe|mash)|শেষ\s+মাসে', cleaned, re.IGNORECASE):
         d = today.replace(day=1) - timedelta(days=1)
-        d = d.replace(day=min(today.day, 28))  # clamp to valid day
-        return _sub_and_return(r'last\s+month|goto\s+mash|গত\s+মাসে', '', d)
+        d = d.replace(day=min(today.day, 28))
+        return _sub_and_return(r'last\s+month|goto\s+mash|গত\s+মাসে|shesh\s+(?:mashe|mash)|শেষ\s+মাসে', '', d)
+
+    # ── "previous week" / "previous month" ──
+    if re.search(r'previous\s+week', cleaned, re.IGNORECASE):
+        d = today - timedelta(days=7)
+        return _sub_and_return(r'previous\s+week', '', d)
+    if re.search(r'previous\s+month', cleaned, re.IGNORECASE):
+        d = today.replace(day=1) - timedelta(days=1)
+        d = d.replace(day=min(today.day, 28))
+        return _sub_and_return(r'previous\s+month', '', d)
+
+    # ── "the week before last" / "the month before last" ──
+    if re.search(r'(?:the\s+)?week\s+before\s+last', cleaned, re.IGNORECASE):
+        d = today - timedelta(days=14)
+        return _sub_and_return(r'(?:the\s+)?week\s+before\s+last', '', d)
+    if re.search(r'(?:the\s+)?month\s+before\s+last', cleaned, re.IGNORECASE):
+        d = (today.replace(day=1) - timedelta(days=1)).replace(day=1)
+        return _sub_and_return(r'(?:the\s+)?month\s+before\s+last', '', d)
+
+    # ── "a couple of days ago" / "a few days ago" / "koyekdin age/aage" / "কয়েকদিন আগে" ──
+    m = re.search(r'(?:a\s+)?couple\s+of\s+days?\s+ago|koyek(?:din)?\s+(?:days?\s+ago|din\s+(?:age|aage)|দিন\s+আগে)|koyekdin\s+(?:age|aage)', cleaned, re.IGNORECASE)
+    if m:
+        d = today - timedelta(days=2)
+        return _sub_and_return(m.re.pattern, '', d)
+    m = re.search(r'(?:a\s+)?few\s+days?\s+ago', cleaned, re.IGNORECASE)
+    if m:
+        d = today - timedelta(days=3)
+        return _sub_and_return(m.re.pattern, '', d)
+    m = re.search(r'কয়েকদিন\s+আগে', cleaned)
+    if m:
+        d = today - timedelta(days=3)
+        return _sub_and_return(m.re.pattern, '', d)
 
     # ── "N days ago" / "N din age/aage" / "N দিন আগে" ──
-    m = re.search(r'(\d+)\s+(?:days?\s+ago|din\s+age|din\s+aage|দিন\s+আগে)', cleaned, re.IGNORECASE)
+    m = re.search(r'(\d+)\s+(?:days?\s+ago|din\s+(?:age|aage)|দিন\s+আগে)', cleaned, re.IGNORECASE)
     if m:
         d = today - timedelta(days=int(m.group(1)))
         return _sub_and_return(m.group(0), '', d)
 
+    # ── "a week ago" / "shoptah age/aage" / "shopta age/aage" / "সপ্তাহ আগে" ──
+    m = re.search(r'(?:a\s+)?week\s+ago|shoptah?(?:\s+age|\s+aage)|সপ্তাহ\s+আগে', cleaned, re.IGNORECASE)
+    if m:
+        d = today - timedelta(days=7)
+        return _sub_and_return(m.re.pattern, '', d)
+
+    # ── "a month ago" / "mashe age/aage" / "mash age/aage" / "মাস আগে" ──
+    m = re.search(r'(?:a\s+)?month\s+ago|mashe?\s+(?:age|aage)|মাস\s+আগে', cleaned, re.IGNORECASE)
+    if m:
+        d = (today.replace(day=1) - timedelta(days=1)).replace(day=min(today.day, 28))
+        return _sub_and_return(m.re.pattern, '', d)
+
+    # ── "N tarikhe" / "N tarikha" (Banglish date refs like "25 tarikhe") ──
+    m = re.search(r'\b(\d{1,2})\s+tarikh[ea]\b', cleaned, re.IGNORECASE)
+    if m:
+        day_num = int(m.group(1))
+        d = _try_date(today.year, today.month, day_num)
+        if d and d <= today:
+            return _sub_and_return(m.re.pattern, '', d)
+        # Try previous month
+        prev = today.replace(day=1) - timedelta(days=1)
+        d = _try_date(prev.year, prev.month, day_num)
+        if d and d <= today:
+            return _sub_and_return(m.re.pattern, '', d)
+
     # ── "last monday", "last tuesday" etc. ──
     day_names = ['monday','tuesday','wednesday','thursday','friday','saturday','sunday']
     for i, day in enumerate(day_names):
-        p = re.compile(r'last\s+' + day, re.IGNORECASE)
-        if p.search(cleaned):
-            days_ago = (today.weekday() - i) % 7
-            if days_ago == 0: days_ago = 7
-            d = today - timedelta(days=days_ago)
-            return _sub_and_return(p.pattern, '', d)
+        for prefix in [r'last\s+', r'this\s+', r'(?:on\s+)?']:
+            p = re.compile(prefix + day, re.IGNORECASE)
+            if p.search(cleaned):
+                days_ago = (today.weekday() - i) % 7
+                if prefix == r'last\s+' and days_ago == 0:
+                    days_ago = 7
+                d = today - timedelta(days=days_ago)
+                return _sub_and_return(p.pattern, '', d)
 
     return original, today.strftime('%Y-%m-%d')
 
@@ -522,6 +600,46 @@ def _clean_split_desc(desc):
     d = re.sub(r'\b\d+(?:\.\d+)?\s*(?:taka|tk|৳|টাকা)\s*$', '', d, flags=re.IGNORECASE).strip()
     d = re.sub(r'\b(?:taka|tk|৳|টাকা)\s*\d+(?:\.\d+)?\s*$', '', d, flags=re.IGNORECASE).strip()
     d = re.sub(r'\s*\d+(?:\.\d+)?\s*$', '', d).strip()
+    return d
+
+
+def clean_date_refs(text):
+    """Remove date/time references from a description string (for AI chat flow)."""
+    d = text.strip()
+    patterns = [
+        (r'\b(?:yesterday|today|tomorrow|day\s+before\s+yesterday|the\s+night\s+before|previous\s+day|previous\s+night|previous\s+week|previous\s+month)\b', re.IGNORECASE),
+        (r'(?:the\s+)?week\s+before\s+last|(?:the\s+)?month\s+before\s+last', re.IGNORECASE),
+        (r'\btonight\b|this\s+(?:morning|afternoon|evening)|earlier\s+today', re.IGNORECASE),
+        (r'\blast\s+(?:day|date|night|evening|morning|afternoon|week|month|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b', re.IGNORECASE),
+        (r'\bthis\s+(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b', re.IGNORECASE),
+        (r'(?:on\s+)?(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b', re.IGNORECASE),
+        (r'\b(?:january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|jun|jul|aug|sep|oct|nov|dec)\s+\d{1,2}(?:st|nd|rd|th)?\b', re.IGNORECASE),
+        (r'\b\d{1,2}(?:st|nd|rd|th)?\s+(?:of\s+)?(?:january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|jun|jul|aug|sep|oct|nov|dec)\b', re.IGNORECASE),
+        (r'\b\d{4}-\d{1,2}-\d{1,2}\b', 0),
+        (r'\b\d{1,2}[/-]\d{1,2}[/-]\d{4}\b', 0),
+        (r'\b(?:a\s+)?couple\s+of\s+days?\s+ago\b|\b(?:a\s+)?few\s+days?\s+ago\b', re.IGNORECASE),
+        (r'\b(?:a\s+)?week\s+ago\b|\b(?:a\s+)?month\s+ago\b', re.IGNORECASE),
+        (r'\b\d+\s+(?:days?\s+ago|din\s+(?:age|aage)|দিন\s+আগে)\b', re.IGNORECASE),
+        # Bangla / Banglish
+        (r'\b(?:aaj|aj(?:ke)?)\b|আজ(?:কে)?', re.IGNORECASE),
+        (r'\bkalke\b|\bparshu\b', re.IGNORECASE),
+        (r'\bgoto\s+(?:parshu|kalke|rate|shakale|dupure|bikele)\b', re.IGNORECASE),
+        (r'\b(?:ai|ei)\s+(?:rate|shakale)\b', re.IGNORECASE),
+        (r'\b(?:ei|agami|shesh)\s+(?:shoptaho|shopta|shoptah|mashe|mash)\b', re.IGNORECASE),
+        (r'গত\s+(?:রাতে|সকালে|দুপুরে|বিকেলে|পরশু|সপ্তাহে|মাসে)', 0),
+        (r'শেষ\s+(?:সপ্তাহে|মাসে)', 0),
+        (r'আগামী\s+(?:সপ্তাহে|মাসে)', 0),
+        (r'এই\s+(?:সপ্তাহে|মাসে)', 0),
+        (r'গতকাল|কাল(?!\s*দুপুর)|পরশুদিন|পরশু', 0),
+        (r'কয়েকদিন\s+আগে|কয়েক\s+ঘন্টা\s+আগে', 0),
+        (r'সপ্তাহ\s+আগে|মাস\s+আগে', 0),
+        (r'\bkoyek(?:din)?\s+(?:days?\s+ago|din\s+(?:age|aage)|দিন\s+আগে)\b|\bkoyekdin\s+(?:age|aage)\b', re.IGNORECASE),
+        (r'\bshoptah?(?:\s+age|\s+aage)\b|\bmashe?\s+(?:age|aage)\b', re.IGNORECASE),
+        (r'\b\d{1,2}\s+tarikh[ea]\b', re.IGNORECASE),
+    ]
+    for pattern, flags in patterns:
+        d = re.sub(pattern, '', d, flags=flags).strip()
+    d = re.sub(r'\s+', ' ', d).strip()
     return d
 
 
