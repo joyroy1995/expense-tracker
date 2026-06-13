@@ -679,3 +679,79 @@ def split_expenses(description):
         return items
     except Exception:
         return None
+
+
+# ── Budget Intent Detection ──────────────────────────────────────
+
+def detect_budget_intent(text):
+    """Detect if a user message is setting a budget (not an expense).
+    Returns {"category": str, "amount": float} or None.
+    Matches patterns like: "set food budget 5000", "add transport budget 3000",
+    "set budget for food to 5000", "food budget 5000", "food er budget 5000",
+    "khabarer budget 5000", "food a budget set koro 5000".
+    """
+    if not text:
+        return None
+    cleaned = text.strip().lower()
+    # Remove common filler words
+    cleaned = re.sub(r'\b(?:please|pls|koro|korun|koren|diben|diyo|set\s+koro|set\s+korun|set\s+koren|add\s+koro|add\s+korun|add\s+koren)\b', '', cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r'\s+', ' ', cleaned).strip()
+
+    # Pattern 0: Overall/total budget intent (check BEFORE category patterns)
+    overall_patterns = [
+        r'(?:set|add|new)?\s*(?:overall|total|monthly|general|maximum)\s+budget\s*(?:set)?\s*(?:koro|diben|diyo|set)?\s*(?:to|at|hole)?\s*(\d+(?:\.\d+)?)',
+        r'(?:set|add|new)?\s*budget\s*(?:set)?\s*(?:for|of)?\s*(?:overall|total|monthly|general|maximum)\s*(?:koro|diben|diyo|set)?\s*(?:to|at|hole)?\s*(\d+(?:\.\d+)?)',
+        r'(?:overall|total|monthly|maximum)\s+(?:spending\s+)?(?:limit|budget)\s*(?:hobe|hole|hocche)?\s*(\d+(?:\.\d+)?)',
+        r'(?:set|add|new)?\s*(?:ekhon|amr|monthly|total)\s+budget\s*(?:set)?\s*(?:koro|diben|diyo)?\s*(\d+(?:\.\d+)?)',
+    ]
+    for pattern in overall_patterns:
+        m = re.search(pattern, cleaned)
+        if m:
+            return {"category": "__overall__", "amount": float(m.group(1))}
+
+    # Build category matching pattern — sort by length descending for greedy match
+    cat_pattern = '|'.join(sorted(CATEGORIES, key=len, reverse=True))
+    cat_pattern_lower = cat_pattern.lower()
+
+    # Pattern 1: "set/add <category> budget <amount>" or "<category> budget <amount>"
+    m = re.search(r'(?:set|add|new)?\s*(' + cat_pattern_lower + r')\s*(?:er|ar|or|theke|a)?\s*budget(?: set)?\s*(?:koro|diben|diyo|set)?\s*(?:to|hole)?\s*(\d+(?:\.\d+)?)', cleaned)
+    if m:
+        category = m.group(1).strip().title()
+        # Map back to canonical category name
+        for c in CATEGORIES:
+            if c.lower() == category.lower():
+                category = c
+                break
+        return {"category": category, "amount": float(m.group(2))}
+
+    # Pattern 2: "set budget for <category> to <amount>"
+    m = re.search(r'set\s+budget\s+(?:for|of)\s+(' + cat_pattern_lower + r')\s+(?:to|at|hole)\s*(\d+(?:\.\d+)?)', cleaned)
+    if m:
+        category = m.group(1).strip().title()
+        for c in CATEGORIES:
+            if c.lower() == category.lower():
+                category = c
+                break
+        return {"category": category, "amount": float(m.group(2))}
+
+    # Pattern 3: "budget for <category> <amount>"
+    m = re.search(r'budget\s+(?:for|of)\s+(' + cat_pattern_lower + r')\s*(?:is|hole)?\s*(\d+(?:\.\d+)?)', cleaned)
+    if m:
+        category = m.group(1).strip().title()
+        for c in CATEGORIES:
+            if c.lower() == category.lower():
+                category = c
+                break
+        return {"category": category, "amount": float(m.group(2))}
+
+    # Pattern 4: "<category> budget <amount>" (simplest form)
+    m = re.search(r'(' + cat_pattern_lower + r')\s+budget\s*(?:hobe|hole|diben|diyo)?\s*(\d+(?:\.\d+)?)', cleaned)
+    if m:
+        category = m.group(1).strip().title()
+        for c in CATEGORIES:
+            if c.lower() == category.lower():
+                category = c
+                break
+        return {"category": category, "amount": float(m.group(2))}
+
+    return None

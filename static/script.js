@@ -51,6 +51,7 @@ function getRoute() {
     '/': 'home',
     '/dashboard': 'dashboard',
     '/profile': 'profile',
+    '/budgets': 'budgets',
     '/admin/users': 'admin-users',
   };
   return { view: routes[path] || 'home', params: p };
@@ -141,6 +142,19 @@ function showToast(message, type = 'success') {
   toast.textContent = message;
   toast.className = `toast ${type} show`;
   setTimeout(() => toast.classList.remove('show'), 3000);
+}
+
+function showBudgetToastAlerts(alerts) {
+  if (!alerts || !alerts.length) return;
+  alerts.forEach(a => {
+    const level = a.percentage >= 100 ? 'danger' : 'warning';
+    const icon = a.percentage >= 100 ? '🚨' : '⚠️';
+    const displayName = catDisplayName(a.category);
+    const text = a.percentage >= 100
+      ? `${displayName} budget exceeded! ৳${a.spent.toFixed(2)} of ৳${a.budget_amount.toFixed(2)}`
+      : `${displayName} at ${a.percentage}% of budget (৳${a.spent.toFixed(2)}/৳${a.budget_amount.toFixed(2)})`;
+    showToast(`${icon} ${text}`, level);
+  });
 }
 
 // ── Helpers ──
@@ -457,6 +471,8 @@ async function renderHome(page = 1) {
       </div>
     </div>
 
+    ${renderBudgetAlerts(d.budget_alerts)}
+
     <div class="card ai-chat-card" id="aiChatCard">
       <div class="card-header-row" id="aiChatToggle" style="cursor:pointer;">
         <h2 class="card-title" style="margin-bottom:0;">
@@ -518,6 +534,29 @@ async function renderHome(page = 1) {
   attachExpenseForm(d.today);
   initChatCard();
   renderChatMessages();
+}
+
+function renderBudgetAlerts(alerts) {
+  if (!alerts || !alerts.length) return '';
+  const items = alerts.map(a => {
+    const level = a.percentage >= 100 ? 'danger' : 'warning';
+    const icon = a.percentage >= 100 ? '🚨' : '⚠️';
+    const displayName = a.category === '__overall__' ? 'Total Spending' : a.category;
+    const text = a.percentage >= 100
+      ? `<strong>${esc(displayName)}</strong> budget exceeded! ৳${a.spent.toFixed(2)} spent of ৳${a.budget_amount.toFixed(2)}`
+      : `<strong>${esc(displayName)}</strong> budget nearly reached: ৳${a.spent.toFixed(2)} of ৳${a.budget_amount.toFixed(2)} (${a.percentage}%)`;
+    return `<div class="budget-alert ${level}">
+      <div class="budget-alert-icon">${icon}</div>
+      <div class="budget-alert-content">
+        <div class="budget-alert-text">${text}</div>
+        <div class="budget-alert-progress">
+          <div class="budget-alert-progress-bar ${level}" style="width:${Math.min(a.percentage, 100)}%"></div>
+        </div>
+      </div>
+      <a href="/budgets" class="budget-alert-link" data-link>View Budgets</a>
+    </div>`;
+  }).join('');
+  return `<div class="budget-alerts">${items}</div>`;
 }
 
 const SPLIT_SEPARATORS = /(\s+ar\s+|,|\s+ও\s+|\s+and\s+|\s*\+\s*)/i;
@@ -637,6 +676,7 @@ function attachExpenseForm(today) {
 
     if (!res.ok) { showToast(res.error, 'error'); return; }
     showToast('Expense added!', 'success');
+    showBudgetToastAlerts(res.data.budget_alerts);
     form.reset();
     preview.innerHTML = '';
     splitMode = false;
@@ -1150,6 +1190,131 @@ async function renderProfile() {
 }
 
 // ── Admin Users ──
+// ── Budgets ──
+
+function catDisplayName(cat) {
+  return cat === '__overall__' ? 'Overall' : cat;
+}
+
+async function renderBudgets() {
+  setLayout('app');
+  document.title = 'Budgets - Expense Tracker';
+  const app = document.getElementById('app');
+  app.innerHTML = '<div class="budget-page page-loader"><div class="spinner-lg"></div></div>';
+
+  const [budgetsRes, catRes] = await Promise.all([
+    api.get('/api/budgets'),
+    api.get('/api/categories'),
+  ]);
+  if (!budgetsRes.ok) { handleAuthError(budgetsRes); return; }
+
+  const budgets = budgetsRes.data.budgets || [];
+  const defaultCategories = ['Food','Transport','Shopping','Bills','Entertainment','Health','Education','Rent','Dining Out','Fruits','Groceries','Travel','Personal Care','Gifts','Investment','Savings','Other'];
+  const allCategories = catRes.ok ? (catRes.data.categories || defaultCategories) : (Object.keys(window.categoryColors || {}).length ? Object.keys(window.categoryColors || {}) : defaultCategories);
+
+  // Separate overall budget from per-category budgets
+  const overallBudget = budgets.find(b => b.category === '__overall__');
+  const catBudgets = budgets.filter(b => b.category !== '__overall__');
+  const setCatCategories = new Set(catBudgets.map(b => b.category));
+  const availableCategories = allCategories.filter(c => !setCatCategories.has(c));
+
+  function budgetCard(b, isOverall) {
+    const pct = b.percentage || 0;
+    const barClass = pct >= 100 ? 'danger' : pct >= 80 ? 'warning' : 'safe';
+    const spentClass = pct >= 100 ? 'danger' : pct >= 80 ? 'warning' : '';
+    const name = isOverall ? 'Overall' : b.category;
+    const dotColor = isOverall ? '#6366f1' : (b.color || '#6b7280');
+    return `<div class="budget-card ${isOverall ? 'budget-card-overall' : ''}">
+      <div class="budget-card-top">
+        <div class="budget-card-category">
+          <span class="budget-category-dot" style="background:${dotColor}"></span>
+          ${isOverall ? '📊 ' : ''}${esc(name)}
+        </div>
+        <div class="budget-card-actions">
+          <span class="budget-amount">৳${Number(b.amount).toFixed(2)}/month</span>
+          <button class="btn btn-danger btn-sm" onclick="deleteBudget(${b.id})">Delete</button>
+        </div>
+      </div>
+      <div class="budget-spent ${spentClass}">
+        Spent: ৳${Number(b.spent || 0).toFixed(2)} (${pct}%)
+      </div>
+      <div class="budget-progress">
+        <div class="budget-progress-bar ${barClass}" style="width:${Math.min(pct, 100)}%"></div>
+      </div>
+    </div>`;
+  }
+
+  app.innerHTML = `
+    <div class="budget-page">
+      <div class="budget-header">
+        <h2>💰 Budgets</h2>
+      </div>
+
+      <!-- Overall budget section -->
+      <div class="budget-form" id="overallBudgetForm">
+        <div class="budget-form-label">Total Monthly Spending Limit</div>
+        <div class="budget-form-row">
+          <input type="number" id="overallBudgetAmount" placeholder="Overall budget (৳)" min="1" step="0.01" value="${overallBudget ? overallBudget.amount : ''}">
+          <button class="btn btn-primary" onclick="setOverallBudget()">${overallBudget ? 'Update' : 'Set'} Overall Budget</button>
+          ${overallBudget ? `<button class="btn btn-danger btn-sm" onclick="deleteBudget(${overallBudget.id})">Remove</button>` : ''}
+        </div>
+      </div>
+
+      ${overallBudget ? `<div class="budget-list overall-section">${budgetCard(overallBudget, true)}</div>` : ''}
+
+      <hr class="budget-divider">
+
+      <!-- Per-category budget section -->
+      <div class="budget-form" id="budgetForm" style="${availableCategories.length ? '' : 'display:none'}">
+        <div class="budget-form-label">Per-Category Budgets</div>
+        <div class="budget-form-row">
+          <select id="budgetCategory">
+            <option value="">Select category...</option>
+            ${availableCategories.map(c => `<option value="${c}">${c}</option>`).join('')}
+          </select>
+          <input type="number" id="budgetAmount" placeholder="Monthly budget (৳)" min="1" step="0.01">
+          <button class="btn btn-primary" onclick="setBudget()">Set Budget</button>
+        </div>
+      </div>
+      <div class="budget-list">
+        ${catBudgets.length ? catBudgets.map(b => budgetCard(b, false)).join('') : '<div class="budget-empty"><p>No per-category budgets set yet.</p><p class="text-secondary">Use the form above or ask AI to set budgets for individual categories.</p></div>'}
+      </div>
+    </div>`;
+}
+
+async function setOverallBudget() {
+  const amtEl = document.getElementById('overallBudgetAmount');
+  const amount = parseFloat(amtEl?.value);
+  if (!amount || amount <= 0) { showToast('Please enter a valid amount', 'error'); return; }
+  const res = await api.post('/api/budgets/set', { category: '__overall__', amount });
+  if (!res.ok) { showToast(res.error || 'Failed to set overall budget', 'error'); return; }
+  showToast(`Overall budget set to ৳${amount.toFixed(2)}`, 'success');
+  renderBudgets();
+}
+
+async function setBudget() {
+  const catEl = document.getElementById('budgetCategory');
+  const amtEl = document.getElementById('budgetAmount');
+  const category = catEl?.value;
+  const amount = parseFloat(amtEl?.value);
+  if (!category) { showToast('Please select a category', 'error'); return; }
+  if (!amount || amount <= 0) { showToast('Please enter a valid amount', 'error'); return; }
+  const res = await api.post('/api/budgets/set', { category, amount });
+  if (!res.ok) { showToast(res.error || 'Failed to set budget', 'error'); return; }
+  showToast(`${catDisplayName(category)} budget set to ৳${amount.toFixed(2)}`, 'success');
+  renderBudgets();
+}
+
+async function deleteBudget(id) {
+  if (!confirm('Delete this budget?')) return;
+  const res = await api.del(`/api/budgets/delete/${id}`);
+  if (!res.ok) { showToast(res.error || 'Failed to delete budget', 'error'); return; }
+  showToast('Budget deleted', 'success');
+  renderBudgets();
+}
+
+// ── Admin ──
+
 async function renderAdminUsers() {
   if (currentUser?.role !== 'superuser') { navigate('/'); return; }
   setLayout('app');
@@ -1425,6 +1590,25 @@ async function sendChatMessage() {
   }
   const d = res.data;
 
+  if (d.type === 'budget') {
+    const res = await api.post('/api/budgets/set', { category: d.category, amount: d.amount });
+    if (res.ok) {
+      const displayName = d.category === '__overall__' ? 'Overall' : d.category;
+      addChatMessage('ai', `✅ Budget set: **${displayName}** → ৳${Number(d.amount).toFixed(2)}/month`);
+      showToast(`${displayName} budget set to ৳${Number(d.amount).toFixed(2)}`, 'success');
+    } else {
+      addChatMessage('ai', `Sorry, I couldn't set that budget. ${res.error || 'Please try again.'}`);
+    }
+    const body = document.getElementById('aiChatBody');
+    const icon = document.getElementById('aiChatCollapseIcon');
+    if (body && body.classList.contains('chat-body-collapsed')) {
+      body.classList.remove('chat-body-collapsed');
+      if (icon) icon.textContent = '▼';
+      localStorage.setItem('aiChatCollapsed', 'false');
+    }
+    return;
+  }
+
   if (d.type === 'expense') {
     chatMessages.push({ type: 'expense_preview', items: d.items, date: d.date });
     renderChatMessages();
@@ -1478,6 +1662,7 @@ async function confirmChatExpenses(index) {
   chatMessages[index] = { type: 'ai', content: `✅ Saved ${count} expense(s): ${summary}` };
   renderChatMessages();
   showToast(`Logged ${count} expense(s)!`, 'success');
+  showBudgetToastAlerts(res.data.budget_alerts);
   refreshHomeData();
 }
 
@@ -1508,6 +1693,12 @@ async function refreshHomeData() {
     todayEl.innerHTML = d.today_expenses.length
       ? d.today_expenses.map(makeExpenseItem).join('')
       : '<div class="empty-state"><p>No expenses today. Add your first one!</p></div>';
+  }
+
+  // Refresh budget alerts
+  const alertsContainer = document.querySelector('.budget-alerts');
+  if (alertsContainer) {
+    alertsContainer.outerHTML = renderBudgetAlerts(d.budget_alerts);
   }
 }
 
@@ -1614,6 +1805,7 @@ async function renderRoute() {
     case 'reset-password': renderResetPassword(token); break;
     case 'home': renderHome(parseInt(params?.page) || 1); break;
     case 'dashboard': renderDashboard(params || {}); break;
+    case 'budgets': renderBudgets(); break;
     case 'profile': renderProfile(); break;
     case 'admin-users': renderAdminUsers(); break;
     default: renderHome(1);

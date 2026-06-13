@@ -112,6 +112,19 @@ def _init_schema(conn):
             )
         """)
         )
+        conn.execute(
+            text("""
+            CREATE TABLE IF NOT EXISTS budgets (
+                id SERIAL PRIMARY KEY,
+                user_id INTEGER NOT NULL REFERENCES users(id),
+                category TEXT NOT NULL,
+                amount REAL NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(user_id, category)
+            )
+        """)
+        )
     else:
         conn.execute(
             text("""
@@ -182,6 +195,20 @@ def _init_schema(conn):
             )
         """)
         )
+        conn.execute(
+            text("""
+            CREATE TABLE IF NOT EXISTS budgets (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                category TEXT NOT NULL,
+                amount REAL NOT NULL,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(user_id, category),
+                FOREIGN KEY (user_id) REFERENCES users(id)
+            )
+        """)
+        )
     conn.execute(
         text("""
             CREATE TABLE IF NOT EXISTS migrations (
@@ -236,6 +263,47 @@ def _run_migrations():
             now = datetime.now(TIMEZONE).strftime("%Y-%m-%d %H:%M:%S")
             conn.execute(
                 text("INSERT INTO migrations (name, applied_at) VALUES ('utc_to_dhaka', :n)"),
+                {"n": now},
+            )
+            conn.commit()
+
+    with engine.connect() as conn:
+        result = conn.execute(
+            text("SELECT COUNT(*) FROM migrations WHERE name = 'budgets_table'")
+        )
+        if result.fetchone()[0] == 0:
+            if _is_postgres():
+                conn.execute(
+                    text("""
+                        CREATE TABLE IF NOT EXISTS budgets (
+                            id SERIAL PRIMARY KEY,
+                            user_id INTEGER NOT NULL REFERENCES users(id),
+                            category TEXT NOT NULL,
+                            amount REAL NOT NULL,
+                            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                            UNIQUE(user_id, category)
+                        )
+                    """)
+                )
+            else:
+                conn.execute(
+                    text("""
+                        CREATE TABLE IF NOT EXISTS budgets (
+                            id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            user_id INTEGER NOT NULL,
+                            category TEXT NOT NULL,
+                            amount REAL NOT NULL,
+                            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                            updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                            UNIQUE(user_id, category),
+                            FOREIGN KEY (user_id) REFERENCES users(id)
+                        )
+                    """)
+                )
+            now = datetime.now(TIMEZONE).strftime("%Y-%m-%d %H:%M:%S")
+            conn.execute(
+                text("INSERT INTO migrations (name, applied_at) VALUES ('budgets_table', :n)"),
                 {"n": now},
             )
             conn.commit()
@@ -778,6 +846,94 @@ def get_learned_categories(user_id):
     return {row[0]: row[1] for row in rows}
 
 
+OVERALL_BUDGET_CATEGORY = "__overall__"
+
+
+# ── Budget CRUD ──────────────────────────────────────────────
+
+def set_budget(user_id, category, amount):
+    conn = get_connection()
+    now = datetime.now(TIMEZONE).strftime("%Y-%m-%d %H:%M:%S")
+    if _is_postgres():
+        conn.execute(
+            text("""
+                INSERT INTO budgets (user_id, category, amount, created_at, updated_at)
+                VALUES (:uid, :cat, :amt, :now, :now)
+                ON CONFLICT(user_id, category) DO UPDATE SET amount = :amt2, updated_at = :now2
+            """),
+            {"uid": user_id, "cat": category, "amt": amount, "now": now,
+             "amt2": amount, "now2": now},
+        )
+    else:
+        conn.execute(
+            text("""
+                INSERT INTO budgets (user_id, category, amount, created_at, updated_at)
+                VALUES (:uid, :cat, :amt, :now, :now)
+                ON CONFLICT(user_id, category) DO UPDATE SET amount = :amt2, updated_at = :now2
+            """),
+            {"uid": user_id, "cat": category, "amt": amount, "now": now,
+             "amt2": amount, "now2": now},
+        )
+    conn.commit()
+
+
+def get_budgets(user_id):
+    conn = get_connection()
+    rows = conn.execute(
+        text("SELECT id, category, amount, created_at, updated_at FROM budgets WHERE user_id = :uid ORDER BY category"),
+        {"uid": user_id},
+    ).fetchall()
+    return [dict(row._mapping) for row in rows]
+
+
+def delete_budget(budget_id):
+    conn = get_connection()
+    conn.execute(text("DELETE FROM budgets WHERE id = :id"), {"id": budget_id})
+    conn.commit()
+
+
+def get_budget_status(user_id, month=None):
+    """Return per-category budget vs actual for a given month (YYYY-MM).
+    Returns list of dicts: {category, budget_amount, spent, percentage} for
+    all budgets (including __overall__). __overall__ spent = total across ALL categories.
+    """
+    if month is None:
+        now = datetime.now(TIMEZONE)
+        month = now.strftime("%Y-%m")
+    conn = get_connection()
+    rows = conn.execute(
+        text("""
+            SELECT b.category, b.amount as budget_amount,
+                   COALESCE(SUM(e.amount), 0) as spent
+            FROM budgets b
+            LEFT JOIN expenses e
+                ON e.user_id = b.user_id
+                AND e.category = b.category
+                AND SUBSTR(e.date, 1, 7) = :month
+            WHERE b.user_id = :uid
+            GROUP BY b.id, b.category, b.amount
+            ORDER BY b.category
+        """),
+        {"uid": user_id, "month": month},
+    ).fetchall()
+    result = []
+    # Pre-compute total spending once
+    total_spent = None
+    for row in rows:
+        r = dict(row._mapping)
+        if r["category"] == OVERALL_BUDGET_CATEGORY:
+            if total_spent is None:
+                total_row = conn.execute(
+                    text("SELECT COALESCE(SUM(amount), 0) FROM expenses WHERE user_id = :uid AND SUBSTR(date, 1, 7) = :month"),
+                    {"uid": user_id, "month": month},
+                ).fetchone()
+                total_spent = total_row[0]
+            r["spent"] = total_spent
+        r["percentage"] = round((r["spent"] / r["budget_amount"]) * 100, 1) if r["budget_amount"] > 0 else 0
+        result.append(r)
+    return result
+
+
 # ── NL Q&A Schema ────────────────────────────────────────────
 
 def get_schema():
@@ -788,6 +944,11 @@ def get_schema():
     ).fetchall()
     categories = [r[0] for r in cats]
     cats_str = ", ".join(categories) if categories else "Groceries, Transport, Dining Out, etc."
+    budget_cats = conn.execute(
+        text("SELECT DISTINCT category FROM budgets ORDER BY category")
+    ).fetchall()
+    budget_cats_display = [("Overall (total spending)" if r[0] == OVERALL_BUDGET_CATEGORY else r[0]) for r in budget_cats]
+    budget_cats_str = ", ".join(budget_cats_display) if budget_cats_display else "none set"
 
     return f"""
 Table: expenses
@@ -806,4 +967,14 @@ Columns:
 - username (TEXT)
 - role (TEXT): 'user' or 'superuser'
 - created_at (TEXT): timestamp
+
+Table: budgets
+Columns:
+- id (INTEGER): primary key
+- user_id (INTEGER): owner of the budget
+- category (TEXT): categories with budgets: {budget_cats_str}
+- amount (REAL): monthly budget amount in BDT
+- created_at (TEXT): timestamp when set
+- updated_at (TEXT): timestamp when last updated
+Budgets are recurring monthly — one budget per category, reset each month.
 """

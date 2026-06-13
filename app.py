@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 from werkzeug.security import generate_password_hash, check_password_hash
 import re
 import database as db
-from llm_service import extract_expense, predict_expense, extract_keywords, generate_sql, answer_from_results, format_answer, split_expenses, _clean_split_desc, extract_date_reference, clean_date_refs
+from llm_service import extract_expense, predict_expense, extract_keywords, generate_sql, answer_from_results, format_answer, split_expenses, _clean_split_desc, extract_date_reference, clean_date_refs, detect_budget_intent
 from config import USERNAME, PASSWORD, SECRET_KEY, CATEGORY_COLORS, TIMEZONE, SEED_CATEGORIES
 
 app = Flask(__name__)
@@ -230,6 +230,8 @@ def api_index():
         exp["color"] = CATEGORY_COLORS.get(exp["category"], "#6b7280")
     for exp in paginated["expenses"]:
         exp["color"] = CATEGORY_COLORS.get(exp["category"], "#6b7280")
+    budget_status = db.get_budget_status(uid)
+    budget_alerts = [b for b in budget_status if b["percentage"] >= 80]
     return jsonify({
         "today": today,
         "today_total": today_total,
@@ -240,6 +242,7 @@ def api_index():
         "recent_total_pages": paginated["total_pages"],
         "recent_total": paginated["total"],
         "category_colors": CATEGORY_COLORS,
+        "budget_alerts": budget_alerts,
     })
 
 
@@ -449,6 +452,11 @@ def api_chat():
     # Extract date reference, then use cleaned text for expense parsing
     cleaned_message, expense_date = extract_date_reference(message, datetime.now(TIMEZONE))
 
+    # Step 0: Check for budget intent BEFORE expense parsing
+    budget_intent = detect_budget_intent(message)
+    if budget_intent:
+        return jsonify({"type": "budget", "category": budget_intent["category"], "amount": budget_intent["amount"]})
+
     # Step 1: Try expense parsing via split_expenses (handles multi & single item)
     items = split_expenses(cleaned_message)
     if items and all(item.get("amount", 0) > 0 for item in items):
@@ -562,7 +570,9 @@ def api_expenses_bulk():
             "color": CATEGORY_COLORS.get(category, "#6b7280"),
         })
 
-    return jsonify({"count": len(saved), "expenses": saved})
+    budget_alerts = db.get_budget_status(session["user_id"])
+    budget_alerts = [b for b in budget_alerts if b["percentage"] >= 80]
+    return jsonify({"count": len(saved), "expenses": saved, "budget_alerts": budget_alerts})
 
 
 # ── Existing API routes (unchanged) ────────────────────────
@@ -600,6 +610,9 @@ def api_add_expense():
 
     expense_id = db.add_expense(date, clean_desc, amount, category, user_id=session["user_id"])
 
+    budget_alerts = db.get_budget_status(session["user_id"])
+    budget_alerts = [b for b in budget_alerts if b["percentage"] >= 80]
+
     return jsonify(
         {
             "id": expense_id,
@@ -608,6 +621,7 @@ def api_add_expense():
             "amount": amount,
             "category": category,
             "color": CATEGORY_COLORS.get(category, "#6b7280"),
+            "budget_alerts": budget_alerts,
         }
     )
 
@@ -760,6 +774,62 @@ def api_export(fmt):
         )
     else:
         return jsonify({"error": "Unsupported format. Use csv, xlsx, or pdf."}), 400
+
+
+# ── API: Categories ────────────────────────────────────────────
+
+@app.route("/api/categories", methods=["GET"])
+@login_required
+def api_categories():
+    return jsonify({"categories": list(CATEGORY_COLORS.keys()), "colors": CATEGORY_COLORS})
+
+
+# ── API: Budgets ──────────────────────────────────────────────
+
+@app.route("/api/budgets", methods=["GET"])
+@login_required
+def api_get_budgets():
+    uid = session["user_id"]
+    budgets = db.get_budgets(uid)
+    budget_status = db.get_budget_status(uid)
+    status_map = {b["category"]: b for b in budget_status}
+    for b in budgets:
+        s = status_map.get(b["category"], {})
+        b["spent"] = s.get("spent", 0)
+        b["percentage"] = s.get("percentage", 0)
+        b["color"] = CATEGORY_COLORS.get(b["category"], "#6b7280")
+    return jsonify({"budgets": budgets})
+
+
+@app.route("/api/budgets/set", methods=["POST"])
+@login_required
+def api_set_budget():
+    data = request.get_json()
+    uid = session["user_id"]
+    category = data.get("category", "").strip()
+    amount = data.get("amount", 0)
+    if not category:
+        return jsonify({"error": "Category is required"}), 400
+    if not isinstance(amount, (int, float)) or amount <= 0:
+        return jsonify({"error": "Amount must be a positive number"}), 400
+    db.set_budget(uid, category, amount)
+    return jsonify({"success": True, "category": category, "amount": amount})
+
+
+@app.route("/api/budgets/delete/<int:budget_id>", methods=["DELETE"])
+@login_required
+def api_delete_budget(budget_id):
+    db.delete_budget(budget_id)
+    return jsonify({"success": True})
+
+
+@app.route("/api/budgets/status", methods=["GET"])
+@login_required
+def api_budget_status():
+    uid = session["user_id"]
+    month = request.args.get("month")
+    status = db.get_budget_status(uid, month=month)
+    return jsonify({"budget_status": status})
 
 
 # ── SPA catch-all ─────────────────────────────────────────
