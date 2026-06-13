@@ -1704,11 +1704,12 @@ function addChatMessage(type, content, sql, data, columns, suggestions) {
 }
 
 const FALLBACK_SUGGESTIONS = [
-  "How does this compare to last month?",
+  "How does this week compare to last week?",
   "Show me the breakdown by category",
-  "What was my biggest expense?",
-  "What's my average daily spending?",
-  "How much did I spend on groceries?",
+  "What's my average daily spending this month?",
+  "What was my biggest expense this month?",
+  "How much did I spend on Dining Out this month?",
+  "How am I doing on my budget this month?",
 ];
 
 let cachedSuggestions = [];

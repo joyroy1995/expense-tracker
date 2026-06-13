@@ -827,6 +827,22 @@ def get_month_total(user_id=None):
     return row[0] if row else 0
 
 
+def get_week_total(user_id, start_date, end_date):
+    """Total spending between two dates (inclusive)."""
+    conn = get_connection()
+    uf = _user_filter(user_id)
+    params = {"start": start_date, "end": end_date}
+    params.update(_user_params(user_id))
+    result = conn.execute(
+        text(
+            f"SELECT COALESCE(SUM(amount), 0) as total FROM expenses WHERE date >= :start AND date <= :end{uf}"
+        ),
+        params,
+    )
+    row = result.fetchone()
+    return row[0] if row else 0
+
+
 def get_distinct_categories():
     conn = get_connection()
     result = conn.execute(
