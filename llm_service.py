@@ -1,4 +1,4 @@
-import google.generativeai as genai
+from groq import Groq
 import json
 import re
 import os
@@ -96,18 +96,13 @@ Examples:
 - "bari bhara 15000" -> {{"category": "Rent", "amount": 15000}}
 """
 
-def _get_model(system_instruction=None):
-    key = os.environ.get("GEMINI_API_KEY", "")
-    if key:
-        genai.configure(api_key=key)
-    return genai.GenerativeModel(
-        model_name="gemini-2.0-flash-lite",
-        system_instruction=system_instruction or SYSTEM_PROMPT,
-    )
+def _get_client():
+    key = os.environ.get("GROQ_API_KEY", "")
+    return Groq(api_key=key) if key else None
 
 
 def _has_api_key():
-    return bool(os.environ.get("GEMINI_API_KEY", ""))
+    return bool(os.environ.get("GROQ_API_KEY", ""))
 
 
 def bengali_to_english_num(text):
@@ -181,9 +176,16 @@ def extract_expense(description, learned_categories=None):
         return {"category": keyword_category(description), "amount": extract_amount_fallback(description) or 0}
 
     try:
-        m = _get_model()
-        response = m.generate_content(description)
-        text = response.text.strip().strip("```").strip()
+        client = _get_client()
+        response = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": description},
+            ],
+            temperature=0.1,
+        )
+        text = response.choices[0].message.content.strip().strip("```").strip()
 
         if text.startswith("json"):
             text = text[4:].strip()
@@ -266,9 +268,15 @@ Cover these points:
 Write in a warm, conversational tone. Do not use bullet points - write in paragraphs."""
 
     try:
-        summary_model = _get_model(system_instruction="You are a friendly Bangladeshi personal finance assistant.")
-        response = summary_model.generate_content(prompt)
-        return response.text.strip()
+        client = _get_client()
+        response = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[
+                {"role": "system", "content": "You are a friendly Bangladeshi personal finance assistant."},
+                {"role": "user", "content": prompt},
+            ],
+        )
+        return response.choices[0].message.content.strip()
     except Exception as e:
         err = str(e)
         if "quota" in err.lower() or "429" in err:
