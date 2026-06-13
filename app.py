@@ -143,7 +143,7 @@ def _fix_sort_order(sql, question):
 
 def _fix_frequency_sql(sql, question):
     """Post-process SQL to use COUNT(*) instead of SUM when user asks about frequency."""
-    if not re.search(r'\b(?:frequency|how\s+many\s+times|how\s+often|most\s+frequent|most\s+used|by\s+count)\b', question, re.IGNORECASE):
+    if not re.search(r'\b(?:frequency|how\s+many\s+times|how\s+often|most\s+frequent|most\s+used|count)\b', question, re.IGNORECASE):
         return sql
     sql_upper = sql.upper()
     # Only modify if the SQL uses SUM(amount) or SUM with a category GROUP BY

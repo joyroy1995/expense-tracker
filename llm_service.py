@@ -578,6 +578,13 @@ def format_answer(columns, data, question):
         top = max(data, key=lambda r: float(r.get(amt_col, 0)))
         return f"Total: ৳{total:.2f} across {len(data)} categories. Most spent on {_display_cat(top[cat_col])} (৳{float(top[amt_col]):.2f})."
 
+    # --- Category with count (frequency) ---
+    if cat_col and cnt_col and len(data) == 1:
+        row = data[0]
+        cat = row.get(cat_col, "")
+        cnt = int(row.get(cnt_col, 0))
+        return f"Most used category: {_display_cat(cat)} ({cnt} transaction(s))."
+
     # --- General list ---
     total = sum(float(r.get(amt_col, 0)) for r in data) if amt_col else 0
     info = f" totaling ৳{total:.2f}" if amt_col else ""
