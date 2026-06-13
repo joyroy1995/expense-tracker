@@ -183,12 +183,13 @@ def extract_expense(description, learned_categories=None):
     try:
         client = _get_client()
         response = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
+            model="llama-3.1-8b-instant",
             messages=[
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": description},
             ],
             temperature=0.1,
+            max_tokens=100,
         )
         text = response.choices[0].message.content.strip().strip("```").strip()
 
@@ -298,12 +299,13 @@ def generate_sql(question, schema):
     try:
         client = _get_client()
         response = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
+            model="llama-3.1-8b-instant",
             messages=[
                 {"role": "system", "content": "You are a SQL query generator. Return only the SQL query."},
                 {"role": "user", "content": prompt},
             ],
             temperature=0.1,
+            max_tokens=150,
         )
         sql = response.choices[0].message.content.strip().strip("```").strip()
         if sql.lower().startswith("sql"):
@@ -311,8 +313,8 @@ def generate_sql(question, schema):
         if sql.lower().startswith("select") or sql.upper().startswith("SELECT"):
             return sql
         return None
-    except Exception:
-        return None
+    except Exception as e:
+        raise e
 
 
 def answer_from_results(question, sql, results, history=None):
@@ -324,12 +326,13 @@ def answer_from_results(question, sql, results, history=None):
     try:
         client = _get_client()
         response = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
+            model="llama-3.1-8b-instant",
             messages=[
                 {"role": "system", "content": "You are a friendly Bangladeshi personal finance assistant."},
                 {"role": "user", "content": prompt},
             ],
             temperature=0.1,
+            max_tokens=200,
         )
         return response.choices[0].message.content.strip()
     except Exception:
@@ -650,7 +653,7 @@ def split_expenses(description):
     try:
         client = _get_client()
         response = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
+            model="llama-3.1-8b-instant",
             messages=[
                 {"role": "system", "content": "You are an expense splitter. Return only a JSON array."},
                 {"role": "user", "content": f"{SPLIT_PROMPT}\n\nInput: {description}\nOutput:"},

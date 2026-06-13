@@ -401,7 +401,10 @@ def api_ask():
     current_date = datetime.now(TIMEZONE).strftime("%B %d, %Y")
     question_with_context = f"Today is {current_date}.\n\nQuestion: {question}"
 
-    sql = generate_sql(question_with_context, schema)
+    try:
+        sql = generate_sql(question_with_context, schema)
+    except Exception as e:
+        return jsonify({"error": f"LLM query failed: {str(e)}"}), 500
     if not sql:
         return jsonify({"error": "Could not generate SQL query. Check API key."}), 500
 
@@ -485,7 +488,10 @@ def api_chat():
     current_date = datetime.now(TIMEZONE).strftime("%B %d, %Y")
     question_with_context = f"Today is {current_date}.\n\nQuestion: {message}"
 
-    sql = generate_sql(question_with_context, schema)
+    try:
+        sql = generate_sql(question_with_context, schema)
+    except Exception as e:
+        return jsonify({"error": f"LLM query failed: {str(e)}"}), 500
     if not sql:
         return jsonify({"error": "Could not generate SQL query. Check API key."}), 500
 
