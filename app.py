@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 from werkzeug.security import generate_password_hash, check_password_hash
 import re
 import database as db
-from llm_service import extract_expense, predict_expense, extract_keywords, generate_sql, answer_from_results, format_answer, split_expenses, _clean_split_desc, extract_date_reference, clean_date_refs, detect_budget_intent, is_question
+from llm_service import extract_expense, predict_expense, extract_keywords, generate_sql, answer_from_results, format_answer, split_expenses, _clean_split_desc, extract_date_reference, clean_date_refs, detect_budget_intent, is_question, transcribe_audio
 from config import USERNAME, PASSWORD, SECRET_KEY, CATEGORY_COLORS, TIMEZONE, SEED_CATEGORIES
 
 app = Flask(__name__)
@@ -839,6 +839,22 @@ def api_budget_status():
     month = request.args.get("month")
     status = db.get_budget_status(uid, month=month)
     return jsonify({"budget_status": status})
+
+
+# ── Audio transcription ────────────────────────────────────
+
+@app.route("/api/transcribe", methods=["POST"])
+@login_required
+def api_transcribe():
+    if "audio" not in request.files:
+        return jsonify({"error": "No audio file"}), 400
+    audio = request.files["audio"]
+    mime_type = audio.content_type or "audio/webm"
+    try:
+        text = transcribe_audio(audio.read(), mime_type)
+        return jsonify({"text": text})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 # ── SPA catch-all ─────────────────────────────────────────

@@ -24,6 +24,17 @@ const api = {
       return { ok: true, data };
     } catch { return { ok: false, error: 'Network error' }; }
   },
+  async postForm(url, formData) {
+    try {
+      const res = await fetch(url, {
+        method: 'POST',
+        body: formData,
+      });
+      const data = await res.json();
+      if (!res.ok) return { ok: false, error: data.error || 'Request failed' };
+      return { ok: true, data };
+    } catch { return { ok: false, error: 'Network error' }; }
+  },
   async del(url) {
     try {
       const res = await fetch(url, { method: 'DELETE' });
@@ -517,6 +528,7 @@ async function renderHome(page = 1) {
         <div class="chat-messages" id="chatMessages"></div>
         <div class="chat-input-area">
           <input type="text" id="chatInput" placeholder="Ask a question..." autocomplete="off">
+          <button id="voiceBtn" class="voice-btn" title="Voice input">🎤</button>
           <button id="chatSendBtn" class="btn btn-primary" onclick="sendChatMessage()">Send</button>
         </div>
       </div>
@@ -1464,6 +1476,197 @@ function initChatCard() {
       if (ci) ci.focus();
     });
   }
+
+  const voiceBtn = document.getElementById('voiceBtn');
+  if (voiceBtn) {
+    const hasNativeSpeech = !!(window.SpeechRecognition || window.webkitSpeechRecognition);
+    const hasMediaRecorder = !!(navigator.mediaDevices?.getUserMedia);
+    if (!hasNativeSpeech && !hasMediaRecorder) {
+      voiceBtn.style.display = 'none';
+    } else {
+      voiceBtn.addEventListener('click', () => {
+        if (voiceRecognition || voiceMediaRecorder) {
+          stopVoiceInput();
+        } else {
+          startVoiceInput();
+        }
+      });
+    }
+  }
+}
+
+let voiceRecognition = null;
+let voiceSilenceTimer = null;
+let voiceFinalTranscript = '';
+let voiceMediaRecorder = null;
+let voiceStream = null;
+let voiceChunks = [];
+let voiceIsNative = false;
+
+function startVoiceInput() {
+  const voiceBtn = document.getElementById('voiceBtn');
+  const input = document.getElementById('chatInput');
+  if (!input || !voiceBtn) return;
+
+  const hasNativeSpeech = !!(window.SpeechRecognition || window.webkitSpeechRecognition);
+
+  if (hasNativeSpeech) {
+    startNativeVoice(input, voiceBtn);
+  } else {
+    startMediaRecorderVoice(input, voiceBtn);
+  }
+}
+
+function startNativeVoice(input, voiceBtn) {
+  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  voiceFinalTranscript = '';
+  voiceIsNative = true;
+
+  const recognition = new SpeechRecognition();
+  recognition.continuous = true;
+  recognition.interimResults = true;
+  recognition.lang = 'en-US';
+
+  recognition.onresult = (event) => {
+    let interim = '';
+    let final = '';
+    for (let i = event.resultIndex; i < event.results.length; i++) {
+      const transcript = event.results[i][0].transcript;
+      if (event.results[i].isFinal) {
+        final += transcript;
+      } else {
+        interim += transcript;
+      }
+    }
+    voiceFinalTranscript += final;
+    input.value = voiceFinalTranscript + interim;
+
+    clearTimeout(voiceSilenceTimer);
+    voiceSilenceTimer = setTimeout(() => {
+      if (input.value.trim()) {
+        stopVoiceInput();
+        sendChatMessage();
+      }
+    }, 1500);
+  };
+
+  recognition.onerror = (event) => {
+    if (event.error === 'no-speech') return;
+    if (event.error === 'aborted') return;
+    showToast('Voice error: ' + event.error, 'error');
+    stopVoiceInput();
+  };
+
+  recognition.onend = () => {
+    if (voiceRecognition) {
+      recognition.start();
+    }
+  };
+
+  try {
+    recognition.start();
+    voiceRecognition = recognition;
+    voiceBtn.classList.add('recording');
+    voiceBtn.title = 'Stop recording';
+    input.placeholder = 'Listening...';
+    input.focus();
+  } catch (e) {
+    showToast('Failed to start voice input', 'error');
+  }
+}
+
+function startMediaRecorderVoice(input, voiceBtn) {
+  voiceIsNative = false;
+
+  const mimeTypes = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/ogg;codecs=opus'];
+  let mimeType = '';
+  for (const mt of mimeTypes) {
+    if (MediaRecorder.isTypeSupported(mt)) {
+      mimeType = mt;
+      break;
+    }
+  }
+
+  navigator.mediaDevices.getUserMedia({ audio: true })
+    .then((stream) => {
+      voiceStream = stream;
+      voiceChunks = [];
+      voiceMediaRecorder = new MediaRecorder(stream, mimeType ? { mimeType } : {});
+
+      voiceMediaRecorder.ondataavailable = (e) => {
+        if (e.data.size > 0) voiceChunks.push(e.data);
+      };
+
+      voiceMediaRecorder.onstop = () => {
+        const blob = new Blob(voiceChunks, { type: mimeType || 'audio/webm' });
+        const formData = new FormData();
+        formData.append('audio', blob, 'recording.' + (mimeType.includes('mp4') ? 'mp4' : 'webm'));
+
+        voiceBtn.classList.add('sending');
+        voiceBtn.textContent = '⏳';
+        input.placeholder = 'Transcribing...';
+
+        api.postForm('/api/transcribe', formData).then((res) => {
+          voiceBtn.classList.remove('sending');
+          voiceBtn.textContent = '🎤';
+          if (res.ok && res.data.text) {
+            input.value = res.data.text;
+            sendChatMessage();
+          } else {
+            showToast('Transcription failed', 'error');
+            input.placeholder = 'Ask a question...';
+          }
+        });
+      };
+
+      voiceMediaRecorder.start();
+      voiceBtn.classList.add('recording');
+      voiceBtn.title = 'Stop recording';
+      input.placeholder = 'Recording...';
+    })
+    .catch((err) => {
+      if (err.name === 'NotAllowedError') {
+        showToast('Microphone permission denied', 'error');
+      } else {
+        showToast('Could not access microphone', 'error');
+      }
+    });
+}
+
+function stopVoiceInput() {
+  clearTimeout(voiceSilenceTimer);
+
+  if (voiceRecognition) {
+    try {
+      voiceRecognition.onend = null;
+      voiceRecognition.stop();
+    } catch (e) {}
+    voiceRecognition = null;
+  }
+
+  if (voiceMediaRecorder && voiceMediaRecorder.state === 'recording') {
+    voiceMediaRecorder.stop();
+    voiceMediaRecorder = null;
+  }
+
+  if (voiceStream) {
+    voiceStream.getTracks().forEach((t) => t.stop());
+    voiceStream = null;
+  }
+
+  const voiceBtn = document.getElementById('voiceBtn');
+  const input = document.getElementById('chatInput');
+
+  if (voiceBtn) {
+    voiceBtn.classList.remove('recording', 'sending');
+    voiceBtn.textContent = '🎤';
+    voiceBtn.title = 'Voice input';
+  }
+  if (input) {
+    input.placeholder = 'Ask a question...';
+  }
+  voiceFinalTranscript = '';
+  voiceChunks = [];
 }
 
 function getWelcomeHtml() {
@@ -1593,6 +1796,7 @@ function renderDataTable(columns, data) {
 }
 
 async function sendChatMessage() {
+  stopVoiceInput();
   const input = document.getElementById('chatInput');
   if (!input) return;
   let message = input.value.trim();

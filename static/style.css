@@ -1549,6 +1549,46 @@ body {
   padding: 10px 18px;
 }
 
+.voice-btn {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: var(--card-bg);
+  cursor: pointer;
+  font-size: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s;
+  flex-shrink: 0;
+  padding: 0;
+  line-height: 1;
+}
+
+.voice-btn:hover {
+  background: var(--bg);
+}
+
+.voice-btn.recording {
+  background: #ef4444;
+  border-color: #ef4444;
+  color: #fff;
+  animation: pulse-recording 1s ease-in-out infinite;
+}
+
+.voice-btn.sending {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: #fff;
+  animation: none;
+}
+
+@keyframes pulse-recording {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.1); }
+}
+
 .chat-sql-toggle {
   font-size: 11px;
   color: var(--primary);
