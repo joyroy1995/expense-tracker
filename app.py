@@ -141,6 +141,34 @@ def _fix_sort_order(sql, question):
     return sql[:insert_pos] + ' DESC ' + sql[insert_pos:].lstrip()
 
 
+_SORT_COL_MAP = {
+    'amount': 'amount', 'money': 'amount', 'spending': 'amount', 'cost': 'amount',
+    'date': 'date', 'day': 'date', 'time': 'date',
+    'category': 'category',
+    'description': 'description', 'name': 'description', 'item': 'description',
+}
+
+
+def _fix_sort_column(sql, question):
+    """Fix ORDER BY column when question explicitly says 'sort by X'."""
+    m = re.search(r'(?:sort|order)\s+by\s+(\w+)', question, re.IGNORECASE)
+    if not m:
+        return sql
+    col = m.group(1).lower()
+    col = _SORT_COL_MAP.get(col)
+    if not col:
+        return sql
+    if not re.search(r'ORDER\s+BY', sql, re.IGNORECASE):
+        return sql
+    sql = re.sub(
+        r'ORDER\s+BY\s+\w+(\s+(?:ASC|DESC))?',
+        f'ORDER BY {col} DESC',
+        sql,
+        flags=re.IGNORECASE,
+    )
+    return sql
+
+
 def _fix_frequency_sql(sql, question):
     """Post-process SQL to use COUNT(*) instead of SUM when user asks about frequency."""
     if not re.search(r'\b(?:frequency|how\s+many\s+times|how\s+often|most\s+frequent|most\s+used|count)\b', question, re.IGNORECASE):
@@ -485,6 +513,7 @@ def _run_qa_pipeline(question, question_with_context, schema, history, uid, forc
     sql = _ensure_user_filter(sql)
     sql = _fix_category_in_sql(sql, question)
     sql = _fix_sort_order(sql, question)
+    sql = _fix_sort_column(sql, question)
     sql = _fix_frequency_sql(sql, question)
     sql = _fix_top_n_limit(sql, question)
 
@@ -500,6 +529,7 @@ def _run_qa_pipeline(question, question_with_context, schema, history, uid, forc
             corrected = _ensure_user_filter(corrected)
             corrected = _fix_category_in_sql(corrected, question)
             corrected = _fix_sort_order(corrected, question)
+            corrected = _fix_sort_column(corrected, question)
             corrected = _fix_frequency_sql(corrected, question)
             corrected = _fix_top_n_limit(corrected, question)
             try:
