@@ -335,6 +335,9 @@ SQL: SELECT b.category, b.amount as budget_amount, (SELECT COALESCE(SUM(amount),
 Q: What are the top 5 categories I spend the most on this year?
 SQL: SELECT category, COALESCE(SUM(amount), 0) as total FROM expenses WHERE user_id = :uid AND date LIKE '{current_year}%' GROUP BY category ORDER BY total DESC LIMIT 5
 
+Q: Show top 5 expenses this month
+SQL: SELECT date, description, amount, category FROM expenses WHERE user_id = :uid AND date LIKE '{current_month}%' ORDER BY amount DESC LIMIT 5
+
 Q: Show all expenses from this week
 SQL: SELECT date, description, amount, category FROM expenses WHERE user_id = :uid AND date >= '{week_start}' AND date <= '{today}' ORDER BY date
 

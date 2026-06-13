@@ -169,6 +169,17 @@ def _fix_frequency_sql(sql, question):
     return sql
 
 
+def _fix_top_n_limit(sql, question):
+    """Fix LIMIT clause when question explicitly says 'top N' / 'last N' / 'N expenses'."""
+    m = re.search(r'\b(top|last|first)\s+(\d+)\b', question, re.IGNORECASE)
+    if not m:
+        return sql
+    n = int(m.group(2))
+    if 'LIMIT' in sql.upper():
+        sql = re.sub(r'LIMIT\s+\d+', f'LIMIT {n}', sql, flags=re.IGNORECASE)
+    return sql
+
+
 # ── API: Auth ──────────────────────────────────────────────
 
 @app.route("/api/me")
@@ -475,6 +486,7 @@ def _run_qa_pipeline(question, question_with_context, schema, history, uid, forc
     sql = _fix_category_in_sql(sql, question)
     sql = _fix_sort_order(sql, question)
     sql = _fix_frequency_sql(sql, question)
+    sql = _fix_top_n_limit(sql, question)
 
     try:
         conn = db.get_connection()
@@ -489,6 +501,7 @@ def _run_qa_pipeline(question, question_with_context, schema, history, uid, forc
             corrected = _fix_category_in_sql(corrected, question)
             corrected = _fix_sort_order(corrected, question)
             corrected = _fix_frequency_sql(corrected, question)
+            corrected = _fix_top_n_limit(corrected, question)
             try:
                 conn2 = db.get_connection()
                 result = conn2.execute(db.text(corrected), {"uid": uid})
