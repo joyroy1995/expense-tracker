@@ -517,6 +517,7 @@ async function renderHome(page = 1) {
 
   attachExpenseForm(d.today);
   initChatCard();
+  renderChatMessages();
 }
 
 const SPLIT_SEPARATORS = /(\s+ar\s+|,|\s+ও\s+|\s+and\s+|\s*\+\s*)/i;
@@ -1273,8 +1274,8 @@ function initChatCard() {
 function getWelcomeHtml() {
   return `<div class="chat-message ai-message">
     <div class="chat-bubble ai-bubble welcome-bubble">
-      Ask me anything about your expenses!<br>
-      <small>e.g., <em>"How much did I spend on chira this month?"</em></small>
+      Ask me about your expenses, or just type them to log!<br>
+      <small>e.g., <em>"biryani 250"</em> or <em>"rickshaw 50 ar coffee 120"</em></small>
     </div>
   </div>`;
 }
@@ -1302,7 +1303,7 @@ function renderChatMessages() {
     container.innerHTML = getWelcomeHtml();
     return;
   }
-  let html = chatMessages.map(msg => {
+  let html = chatMessages.map((msg, idx) => {
     if (msg.type === 'user') {
       return `<div class="chat-message user-message"><div class="chat-bubble user-bubble">${esc(msg.content)}</div></div>`;
     }
@@ -1324,6 +1325,33 @@ function renderChatMessages() {
         });
         h += `</div>`;
       }
+      return h;
+    }
+    if (msg.type === 'expense_preview') {
+      const items = msg.items || [];
+      let total = items.reduce((s, i) => s + (i.amount || 0), 0);
+      let h = `<div class="chat-message ai-message"><div class="chat-bubble ai-bubble">`;
+      const headerDate = msg.date && msg.date !== new Date().toISOString().slice(0, 10) ? ` for ${msg.date}` : '';
+      h += `<div class="chat-expense-header">I found these expenses${headerDate}:</div>`;
+      h += `<div class="chat-expense-list">`;
+      items.forEach(i => {
+        const col = i.color || '#6b7280';
+        h += `<div class="chat-expense-item">
+          <span class="category-badge" style="background-color:${col}">${esc(i.category)}</span>
+          <span class="chat-expense-desc">${esc(i.description || '')}</span>
+          <span class="chat-expense-amt">৳${(i.amount || 0).toFixed(2)}</span>
+        </div>`;
+      });
+      h += `</div>`;
+      h += `<div class="chat-expense-total">Total: ৳${total.toFixed(2)}</div>`;
+      h += `<div class="chat-expense-actions">`;
+      if (msg.saving) {
+        h += `<span class="chat-expense-saving">Saving...</span>`;
+      } else {
+        h += `<button class="btn btn-primary btn-sm" onclick="confirmChatExpenses(${idx})">✓ Save</button>`;
+        h += `<button class="btn btn-outline btn-sm" onclick="dismissChatExpenses(${idx})">✗ Skip</button>`;
+      }
+      h += `</div></div></div>`;
       return h;
     }
     if (msg.type === 'loading') {
@@ -1366,9 +1394,12 @@ function renderDataTable(columns, data) {
 async function sendChatMessage() {
   const input = document.getElementById('chatInput');
   if (!input) return;
-  const question = input.value.trim();
-  if (!question) return;
+  let message = input.value.trim();
+  if (!message) return;
   input.value = '';
+
+  // Strip leading action words for cleaner parsing
+  message = message.replace(/^(add|save|log|record)\s+/i, '').trim();
 
   // Build conversation history (last 6 pairs)
   const history = [];
@@ -1378,9 +1409,9 @@ async function sendChatMessage() {
     }
   }
 
-  addChatMessage('user', question);
+  addChatMessage('user', message);
   addChatMessage('loading', '');
-  const res = await api.post('/api/ask', { question, history: history.slice(-12) });
+  const res = await api.post('/api/chat', { message, history: history.slice(-12) });
   chatMessages = chatMessages.filter(m => m.type !== 'loading');
   if (!res.ok) {
     addChatMessage('ai', 'Sorry, I couldn\'t process that. ' + (res.error || 'Please try again.'));
@@ -1388,9 +1419,21 @@ async function sendChatMessage() {
   }
   const d = res.data;
 
-  // Pick 2-3 contextual suggestion chips
-  const suggestions = pickSuggestions(question, d.answer);
+  if (d.type === 'expense') {
+    chatMessages.push({ type: 'expense_preview', items: d.items, date: d.date });
+    renderChatMessages();
+    const body = document.getElementById('aiChatBody');
+    const icon = document.getElementById('aiChatCollapseIcon');
+    if (body && body.classList.contains('chat-body-collapsed')) {
+      body.classList.remove('chat-body-collapsed');
+      if (icon) icon.textContent = '▼';
+      localStorage.setItem('aiChatCollapsed', 'false');
+    }
+    return;
+  }
 
+  // Q&A response
+  const suggestions = pickSuggestions(message, d.answer);
   addChatMessage('ai', d.answer || 'I found ' + (d.data ? d.data.length : 0) + ' result(s).', d.sql, d.data, d.columns, suggestions);
 
   const body = document.getElementById('aiChatBody');
@@ -1399,6 +1442,59 @@ async function sendChatMessage() {
     body.classList.remove('chat-body-collapsed');
     if (icon) icon.textContent = '▼';
     localStorage.setItem('aiChatCollapsed', 'false');
+  }
+}
+
+async function confirmChatExpenses(index) {
+  const msg = chatMessages[index];
+  if (!msg || msg.type !== 'expense_preview' || msg.saving) return;
+  msg.saving = true;
+  renderChatMessages();
+
+  const date = msg.date || new Date().toISOString().slice(0, 10);
+  const res = await api.post('/api/expenses/bulk', { date, items: msg.items });
+  if (!res.ok) {
+    showToast(res.error || 'Failed to save expenses', 'error');
+    msg.saving = false;
+    renderChatMessages();
+    return;
+  }
+
+  const count = res.data.count || msg.items.length;
+  const summary = msg.items.map(i => `${i.description || ''}: ৳${i.amount.toFixed(2)}`).join(', ');
+  chatMessages[index] = { type: 'ai', content: `✅ Saved ${count} expense(s): ${summary}` };
+  renderChatMessages();
+  showToast(`Logged ${count} expense(s)!`, 'success');
+  refreshHomeData();
+}
+
+function dismissChatExpenses(index) {
+  const msg = chatMessages[index];
+  if (!msg || msg.type !== 'expense_preview') return;
+  chatMessages.splice(index, 1);
+  renderChatMessages();
+}
+
+async function refreshHomeData() {
+  const res = await api.get('/api/index');
+  if (!res.ok) return;
+  const d = res.data;
+  window.categoryColors = d.category_colors;
+
+  // Update stats
+  const statValues = document.querySelectorAll('.stat-value');
+  if (statValues.length >= 3) {
+    statValues[0].textContent = '৳' + Number(d.today_total).toFixed(2);
+    statValues[1].textContent = '৳' + Number(d.month_total).toFixed(2);
+    statValues[2].textContent = d.today_expenses.length;
+  }
+
+  // Update today's expenses list
+  const todayEl = document.getElementById('todayExpenses');
+  if (todayEl) {
+    todayEl.innerHTML = d.today_expenses.length
+      ? d.today_expenses.map(makeExpenseItem).join('')
+      : '<div class="empty-state"><p>No expenses today. Add your first one!</p></div>';
   }
 }
 

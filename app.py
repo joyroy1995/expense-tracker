@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 from werkzeug.security import generate_password_hash, check_password_hash
 import re
 import database as db
-from llm_service import extract_expense, predict_expense, extract_keywords, generate_sql, answer_from_results, format_answer, split_expenses, _clean_split_desc
+from llm_service import extract_expense, predict_expense, extract_keywords, generate_sql, answer_from_results, format_answer, split_expenses, _clean_split_desc, extract_date_reference
 from config import USERNAME, PASSWORD, SECRET_KEY, CATEGORY_COLORS, TIMEZONE, SEED_CATEGORIES
 
 app = Flask(__name__)
@@ -425,6 +425,84 @@ def api_ask():
         answer = format_answer(columns, rows_data, question)
 
     return jsonify({
+        "answer": answer,
+        "sql": sql,
+        "data": rows_data[:50],
+        "columns": columns,
+    })
+
+
+# ── Chat (unified expense + Q&A) ──────────────────────────
+
+@app.route("/api/chat", methods=["POST"])
+@login_required
+def api_chat():
+    data = request.get_json()
+    message = data.get("message", "").strip()
+    history = data.get("history", [])
+
+    if len(message) < 2:
+        return jsonify({"error": "Message required"}), 400
+
+    learned = db.get_learned_categories(session["user_id"])
+
+    # Extract date reference, then use cleaned text for expense parsing
+    cleaned_message, expense_date = extract_date_reference(message, datetime.now(TIMEZONE))
+
+    # Step 1: Try expense parsing via split_expenses (handles multi & single item)
+    items = split_expenses(cleaned_message)
+    if items and all(item.get("amount", 0) > 0 for item in items):
+        for item in items:
+            item["color"] = CATEGORY_COLORS.get(item["category"], "#6b7280")
+        return jsonify({"type": "expense", "date": expense_date, "items": items})
+
+    # Step 2: Try single-item prediction
+    prediction = predict_expense(cleaned_message, learned_categories=learned)
+    if prediction and prediction.get("amount", 0) > 0:
+        cat = prediction["category"]
+        return jsonify({
+            "type": "expense",
+            "date": expense_date,
+            "items": [{
+                "description": _clean_split_desc(cleaned_message) or cleaned_message,
+                "category": cat,
+                "amount": prediction["amount"],
+                "color": CATEGORY_COLORS.get(cat, "#6b7280"),
+            }]
+        })
+
+    # Step 3: Fall through to Q&A
+    schema = _get_schema_cached()
+    current_date = datetime.now(TIMEZONE).strftime("%B %d, %Y")
+    question_with_context = f"Today is {current_date}.\n\nQuestion: {message}"
+
+    sql = generate_sql(question_with_context, schema)
+    if not sql:
+        return jsonify({"error": "Could not generate SQL query. Check API key."}), 500
+
+    if not _validate_sql(sql):
+        return jsonify({"error": "Generated query is not a valid SELECT statement"}), 500
+
+    sql = _ensure_user_filter(sql)
+
+    try:
+        conn = db.get_connection()
+        result = conn.execute(db.text(sql), {"uid": session["user_id"]})
+        columns = list(result.keys()) if result.returns_rows else []
+        rows = result.fetchmany(50)
+        rows_data = [dict(r._mapping) for r in rows]
+    except Exception as e:
+        return jsonify({"error": f"Query execution failed: {str(e)}", "sql": sql}), 500
+
+    if _needs_llm_answer(message):
+        answer = answer_from_results(message, sql, rows_data[:20], history=history)
+        if not answer:
+            answer = format_answer(columns, rows_data, message)
+    else:
+        answer = format_answer(columns, rows_data, message)
+
+    return jsonify({
+        "type": "question",
         "answer": answer,
         "sql": sql,
         "data": rows_data[:50],

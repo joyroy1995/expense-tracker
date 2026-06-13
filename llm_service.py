@@ -2,6 +2,7 @@ from groq import Groq
 import json
 import re
 import os
+from datetime import date, timedelta
 from config import SEED_CATEGORIES
 
 CATEGORIES = [
@@ -415,6 +416,104 @@ Output: [{{"description":"rickshaw","category":"Transport","amount":30}},
          {{"description":"lunch","category":"Dining Out","amount":150}}]
 
 Return ONLY a valid JSON array. No explanation."""
+
+
+def extract_date_reference(text, now):
+    """
+    Extract date reference from user message (English / Banglish / Bengali).
+    Returns (cleaned_text, date_str) where date_str is YYYY-MM-DD.
+    """
+    original = text.strip()
+    if not original:
+        return text, now.strftime('%Y-%m-%d')
+    today = now.date() if hasattr(now, 'date') else now
+    cleaned = original
+
+    month_map = {
+        'january':1,'february':2,'march':3,'april':4,'may':5,'june':6,
+        'july':7,'august':8,'september':9,'october':10,'november':11,'december':12,
+        'jan':1,'feb':2,'mar':3,'apr':4,'jun':6,'jul':7,'aug':8,
+        'sep':9,'sept':9,'oct':10,'nov':11,'dec':12,
+    }
+
+    def _try_date(y, m, d):
+        try: return date(int(y), int(m), int(d))
+        except: return None
+
+    def _sub_and_return(pattern, repl, date_val):
+        nonlocal cleaned
+        cleaned = re.sub(pattern, repl, cleaned, count=1, flags=re.IGNORECASE).strip()
+        cleaned = re.sub(r'\s+', ' ', cleaned).strip()
+        return cleaned, date_val.strftime('%Y-%m-%d')
+
+    # ── Explicit ISO: 2024-06-12 ──
+    m = re.search(r'\b(\d{4})-(\d{1,2})-(\d{1,2})\b', cleaned)
+    if m:
+        d = _try_date(m.group(1), m.group(2), m.group(3))
+        if d: return _sub_and_return(m.group(0), '', d)
+
+    # ── Explicit DD/MM/YYYY or MM/DD/YYYY ──
+    m = re.search(r'\b(\d{1,2})[/](\d{1,2})[/](\d{4})\b', cleaned)
+    if m:
+        for a,b in [(1,2),(2,1)]:
+            d = _try_date(m.group(3), m.group(a), m.group(b))
+            if d and d <= today: return _sub_and_return(m.group(0), '', d)
+
+    # ── "June 12, 2024" or "12 June 2024" ──
+    m = re.search(r'(?:on\s+)?(\d{1,2})(?:st|nd|rd|th)?\s+(?:of\s+)?(' + '|'.join(month_map) + r')\s*,?\s*(\d{4})?', cleaned, re.IGNORECASE)
+    if not m:
+        m = re.search(r'(?:on\s+)?(' + '|'.join(month_map) + r')\s+(\d{1,2})(?:st|nd|rd|th)?\s*,?\s*(\d{4})?', cleaned, re.IGNORECASE)
+        if m:
+            day, month_name, year = m.group(2), m.group(1).lower(), m.group(3)
+            month = month_map.get(month_name)
+            if month:
+                d = _try_date(year or today.year, month, day)
+                if d: return _sub_and_return(m.group(0), '', d)
+    else:
+        day, month_name, year = m.group(1), m.group(2).lower(), m.group(3)
+        month = month_map.get(month_name)
+        if month:
+            d = _try_date(year or today.year, month, day)
+            if d: return _sub_and_return(m.group(0), '', d)
+
+    # ── "day before yesterday" / পরশু / "goto parshu" ──
+    if re.search(r'day before yesterday|goto\s+parshu|গত পরশু|পরশু', cleaned, re.IGNORECASE):
+        d = today - timedelta(days=2)
+        return _sub_and_return(r'day before yesterday|goto\s+parshu|গত পরশু|পরশু', '', d)
+
+    # ── "yesterday" / "last night" / kalke / goto kalke / গতকাল / কাল ──
+    if re.search(r'\byesterday\b|\blast\s+(?:night|evening|morning|afternoon)\b|\bgoto\s+kalke\b|গতকাল|কাল(?!\s*দুপুর)', cleaned, re.IGNORECASE):
+        d = today - timedelta(days=1)
+        return _sub_and_return(r'\byesterday\b|\blast\s+(?:night|evening|morning|afternoon)\b|\bgoto\s+kalke\b|গতকাল|কাল(?!\s*দুপুর)', '', d)
+
+    # ── "last week" / goto shoptaho / গত সপ্তাহে ──
+    if re.search(r'last\s+week|goto\s+(?:shoptaho|shopta)|গত\s+সপ্তাহে', cleaned, re.IGNORECASE):
+        d = today - timedelta(days=7)
+        return _sub_and_return(r'last\s+week|goto\s+(?:shoptaho|shopta)|গত\s+সপ্তাহে', '', d)
+
+    # ── "last month" / goto mash / গত মাসে ──
+    if re.search(r'last\s+month|goto\s+mash|গত\s+মাসে', cleaned, re.IGNORECASE):
+        d = today.replace(day=1) - timedelta(days=1)
+        d = d.replace(day=min(today.day, 28))  # clamp to valid day
+        return _sub_and_return(r'last\s+month|goto\s+mash|গত\s+মাসে', '', d)
+
+    # ── "N days ago" / "N din age/aage" / "N দিন আগে" ──
+    m = re.search(r'(\d+)\s+(?:days?\s+ago|din\s+age|din\s+aage|দিন\s+আগে)', cleaned, re.IGNORECASE)
+    if m:
+        d = today - timedelta(days=int(m.group(1)))
+        return _sub_and_return(m.group(0), '', d)
+
+    # ── "last monday", "last tuesday" etc. ──
+    day_names = ['monday','tuesday','wednesday','thursday','friday','saturday','sunday']
+    for i, day in enumerate(day_names):
+        p = re.compile(r'last\s+' + day, re.IGNORECASE)
+        if p.search(cleaned):
+            days_ago = (today.weekday() - i) % 7
+            if days_ago == 0: days_ago = 7
+            d = today - timedelta(days=days_ago)
+            return _sub_and_return(p.pattern, '', d)
+
+    return original, today.strftime('%Y-%m-%d')
 
 
 def _clean_split_desc(desc):

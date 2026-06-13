@@ -1643,6 +1643,62 @@ body {
   30% { transform: translateY(-6px); opacity: 1; }
 }
 
+/* ── Chat Expense Preview ── */
+.chat-expense-header {
+  font-weight: 600;
+  font-size: 14px;
+  margin-bottom: 8px;
+  color: var(--text);
+}
+.chat-expense-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+.chat-expense-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+  font-size: 13px;
+}
+.chat-expense-item .category-badge {
+  flex-shrink: 0;
+}
+.chat-expense-desc {
+  flex: 1;
+  color: var(--text);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chat-expense-amt {
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.chat-expense-total {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text);
+  padding-top: 6px;
+  border-top: 1px solid var(--border);
+  margin-bottom: 8px;
+}
+.chat-expense-actions {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+.chat-expense-saving {
+  font-size: 13px;
+  color: var(--text-secondary);
+  font-style: italic;
+}
+
 /* ── Suggestion Chips ── */
 .chat-suggestion-chips {
   display: flex;
