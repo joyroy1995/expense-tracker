@@ -606,102 +606,74 @@ def api_suggestions():
 
     month_total = sum(c["total"] for c in cats) if cats else 0
     daily_avg = round(month_total / days_elapsed, 0) if days_elapsed and month_total else 0
-    projected = round(daily_avg * days_in_month, 0) if daily_avg else 0
 
     pool = []
 
     # ── 1. Week-over-week ──
-    if week_total or last_week_total:
-        diff = week_total - last_week_total
-        if diff > 0:
-            pool.append(f"This week I spent ৳{week_total:,.0f} — ৳{diff:,.0f} more than last week")
-        elif diff < 0:
-            pool.append(f"This week I spent ৳{week_total:,.0f} — ৳{abs(diff):,.0f} less than last week")
-        else:
-            pool.append(f"This week and last week both came to ৳{week_total:,.0f}")
+    if (week_total or last_week_total) and week_total != last_week_total:
+        pool.append("How does this week compare to last week?")
 
     # ── 2. Month pacing ──
     if daily_avg and month_total:
-        pool.append(f"On track to spend ৳{projected:,.0f} by end of month (daily avg: ৳{daily_avg:,.0f})")
+        pool.append("Am I on track with my spending this month?")
 
     # ── 3. Month-over-month ──
     if len(monthly) >= 2:
         this_m = monthly[0]["total"]
         last_m = monthly[1]["total"]
-        if last_m:
-            pct = round((this_m - last_m) / last_m * 100, 0)
-            if pct > 0:
-                pool.append(f"This month (৳{this_m:,.0f}) is {pct:,.0f}% higher than last month (৳{last_m:,.0f})")
-            elif pct < 0:
-                pool.append(f"This month (৳{this_m:,.0f}) is {abs(pct):,.0f}% lower than last month (৳{last_m:,.0f})")
+        if last_m and this_m != last_m:
+            pool.append("How does this month compare to last month?")
 
     # ── 4. Top category ──
     if cats:
-        top = cats[0]
-        pct_of_total = round(top["total"] / month_total * 100, 0) if month_total else 0
-        pool.append(f"My top category this month: {top['category']} (৳{top['total']:,.0f} — {pct_of_total:,.0f}% of spending)")
+        pool.append("What did I spend the most on this month?")
 
     # ── 5. Category with most transactions ──
     if cats:
         max_count = max(c["count"] for c in cats)
-        busiest = [c for c in cats if c["count"] == max_count][0]
         if max_count >= 3:
-            pool.append(f"Most frequent category: {busiest['category']} ({max_count}x this month)")
+            pool.append("Which category did I use the most this month?")
 
     # ── 6. Budget watch ──
     for b in sorted(budgets, key=lambda x: x["percentage"], reverse=True)[:2]:
         pct = b["percentage"]
         label = "Overall" if b["category"] == "__overall__" else b["category"]
-        if pct >= 100:
-            pool.append(f"Warning: {label} budget fully used ({pct:,.0f}%)")
-        elif pct >= 75:
-            pool.append(f"{label} budget at {pct:,.0f}% — do I have budget left?")
-        elif 50 <= pct < 75:
-            pool.append(f"How much budget left for {label}?")
-        elif pct > 0 and pct < 50:
+        if pct >= 75:
+            pool.append(f"Do I have budget left for {label}?")
+        elif pct > 0:
             pool.append(f"How am I doing on {label} budget?")
 
-    # ── 7. Categories not spent in this month ──
+    # ── 7. Unused categories ──
     used_cats = {c["category"] for c in cats}
     unused = [c for c in _ALL_CATEGORIES if c not in used_cats]
-    if unused:
-        # pick a random unused category only if there are enough categories used already
-        if len(used_cats) >= 5:
-            pick = random.choice(unused)
-            pool.append(f"I haven't spent anything on {pick} yet this month")
+    if unused and len(used_cats) >= 5:
+        pick = random.choice(unused)
+        pool.append(f"Have I spent anything on {pick} this month?")
 
     # ── 8. Average transaction size ──
     if cats:
         total_count = sum(c["count"] for c in cats)
         avg_txn = round(month_total / total_count, 0) if total_count else 0
         if avg_txn:
-            pool.append(f"My average expense is ৳{avg_txn:,.0f} (across {total_count} transactions this month)")
+            pool.append("What's my average expense size?")
 
-    # ── 9. Number of categories used ──
+    # ── 9. Biggest expense ──
+    pool.append("What was my biggest expense this month?")
+
+    # ── 10. Category breakdown ──
     if len(used_cats) >= 3:
-        pool.append(f"Show me the breakdown by category ({len(used_cats)} categories this month)")
+        pool.append("Show me the breakdown by category")
 
-    # ── 10. Biggest expense (if cats data has individual expenses) ──
-    # We don't have individual top expense from current queries, so skip unless we query it
-
-    # Fallback: always ensure at least "How much on {top}" type questions
+    # ── 11. Top category "How much on X" ──
     for c in cats[:2]:
-        q = f"How much on {c['category']}?"
-        if q not in pool:
-            pool.append(q)
+        pool.append(f"How much on {c['category']}?")
 
-    # Ensure "Compare weeks" and "Average daily" are always present as generic fallbacks
-    generic = [
-        "How does this week compare to last week?",
-        "What's my average daily spending this month?",
-    ]
-    for g in generic:
-        if g not in pool:
-            pool.append(g)
+    # ── 12. Generic fallbacks ──
+    pool.append("How does this week compare to last week?")
+    pool.append("What's my average daily spending this month?")
 
-    # Shuffle and pick top 4 (prefer non-generic over generic by putting generics at end)
+    # Shuffle, deduplicate, return 4
     random.shuffle(pool)
-    # Remove duplicates while preserving some shuffling
     seen = set()
     unique = []
     for s in pool:
