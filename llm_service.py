@@ -2,6 +2,7 @@ from groq import Groq
 import json
 import re
 import os
+import calendar
 from datetime import date as _d, timedelta, date
 from config import SEED_CATEGORIES
 
@@ -257,7 +258,9 @@ def _fmt_dates():
     seven_days_ago = (today - timedelta(days=7)).isoformat()
     week_start = (today - timedelta(days=today.weekday())).isoformat()
     last_week_start = (today - timedelta(days=today.weekday() + 7)).isoformat()
-    return today.isoformat(), ym, prev, today.strftime("%Y"), seven_days_ago, week_start, last_week_start
+    days_elapsed = today.day
+    days_in_month = calendar.monthrange(today.year, today.month)[1]
+    return today.isoformat(), ym, prev, today.strftime("%Y"), seven_days_ago, week_start, last_week_start, days_elapsed, days_in_month
 
 SQL_PROMPT = """You are a SQL query generator for a personal expense tracker. Given a user's natural language question and the current date, generate a SQL query to answer it.
 
@@ -279,6 +282,7 @@ Rules:
    - Use SUBSTR(date, 1, 7) for year-month extraction
    - For date ranges use date >= 'YYYY-MM-DD' AND date <= 'YYYY-MM-DD'
    - Pre-computed relative dates — use as literal strings: today={today}, 7_days_ago={seven_days_ago}, week_start={week_start}, last_week_start={last_week_start}
+    - Pre-computed date helpers for pacing: days_elapsed={days_elapsed}, days_in_month={days_in_month}
 6. Column names: id, date, description, amount, category, user_id, created_at
 7. Use COALESCE for safe SUM/AVG aggregates.
 8. Limit results to 50 rows max unless the user asks for a specific number.
@@ -310,6 +314,9 @@ SQL: SELECT date, description, amount, category FROM expenses WHERE user_id = :u
 
 Q: Average daily spending this month
 SQL: SELECT COALESCE(AVG(daily.total), 0) as avg_daily FROM (SELECT SUM(amount) as total FROM expenses WHERE user_id = :uid AND date LIKE '{current_month}%' GROUP BY date) daily
+
+Q: Am I on track with my spending this month?
+SQL: SELECT COALESCE(SUM(amount), 0) as total, ROUND(COALESCE(SUM(amount), 0) / {days_elapsed}, 0) as daily_avg, {days_elapsed} as days_elapsed, {days_in_month} as days_in_month FROM expenses WHERE user_id = :uid AND date LIKE '{current_month}%'
 
 Q: How many times did I eat out this month?
 SQL: SELECT COUNT(*) as count FROM expenses WHERE user_id = :uid AND category = 'Dining Out' AND date LIKE '{current_month}%'
@@ -374,11 +381,12 @@ Answer:"""
 def generate_sql(question, schema, retries=1):
     if not _has_api_key():
         return None
-    today, current_month, last_month, current_year, seven_days_ago, week_start, last_week_start = _fmt_dates()
+    today, current_month, last_month, current_year, seven_days_ago, week_start, last_week_start, days_elapsed, days_in_month = _fmt_dates()
     prompt = SQL_PROMPT.format(
         today=today, current_month=current_month, last_month=last_month,
         current_year=current_year, seven_days_ago=seven_days_ago,
         week_start=week_start, last_week_start=last_week_start,
+        days_elapsed=days_elapsed, days_in_month=days_in_month,
         schema=schema, question=question,
     )
     last_error = None
@@ -508,6 +516,9 @@ def format_answer(columns, data, question):
     min_col = next((c for c in columns if c.lower() in ("min", "minimum")), None)
     remaining_col = next((c for c in columns if c.lower() == "remaining"), None)
     budget_col = next((c for c in columns if c.lower() in ("budget_amount", "budget")), None)
+    days_elapsed_col = next((c for c in columns if c.lower() in ("days_elapsed",)), None)
+    days_in_month_col = next((c for c in columns if c.lower() in ("days_in_month",)), None)
+    daily_avg_col = next((c for c in columns if c.lower() in ("daily_avg",)), None)
 
     # --- Budget remaining / status ---
     if remaining_col is not None and budget_col is not None:
@@ -523,6 +534,23 @@ def format_answer(columns, data, question):
             return f"You have used your entire budget{prefix} (৳{budget:.2f})."
         else:
             return f"You have exceeded your budget{prefix} by ৳{abs(remaining):.2f} (spent ৳{spent:.2f} of ৳{budget:.2f})."
+
+    # --- Pacing / on-track ---
+    if daily_avg_col and days_elapsed_col and days_in_month_col and amt_col:
+        row = data[0]
+        total_spent = float(row.get(amt_col, 0))
+        daily_avg = float(row.get(daily_avg_col, 0))
+        de = int(row.get(days_elapsed_col, 1))
+        dim = int(row.get(days_in_month_col, 30))
+        projected = round(daily_avg * dim, 0)
+        left_days = dim - de
+        remaining_budget = " (no budget set)"
+        for b in data:  # check if budget data merged
+            if row.get(budget_col if budget_col else ""):
+                pass
+        if total_spent and daily_avg:
+            return f"Spent ৳{total_spent:,.0f} in {de} day(s) (avg: ৳{daily_avg:,.0f}/day). On track for ৳{projected:,.0f} by end of month ({left_days} day(s) left)."
+        return f"Spent ৳{total_spent:,.0f} in {de} day(s) this month."
 
     # --- Single or multi-month comparison ---
     if month_col and amt_col and len(data) >= 2:
