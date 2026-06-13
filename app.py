@@ -319,6 +319,27 @@ def _fix_date_filter(sql, question):
     return sql
 
 
+def _fix_show_expenses_aggregate(sql, question):
+    """Rewrite aggregate queries to individual records when user asks to 'show expenses'."""
+    q = question.lower()
+    show_intent = bool(re.search(r'\b(?:show|list|display)\b', q)) or \
+                  bool(re.search(r'\bwhat\s+(?:are|were|is|was)\b.*\b(?:expense|transaction|record)', q))
+    if not show_intent:
+        return sql
+    if not re.search(r'\b(?:expense|expenses|transaction|transactions|record|records)\b', q):
+        return sql
+    if re.search(r'\b(?:how\s+much|total|sum|amount|spent|spend)\b', q):
+        return sql
+    if not re.search(r'\b(?:SUM|COUNT|AVG|COALESCE)\s*\(', sql, re.IGNORECASE):
+        return sql
+    if re.search(r'\bGROUP\s+BY\b', sql, re.IGNORECASE):
+        return sql
+    parts = re.split(r'\bFROM\b', sql, maxsplit=1, flags=re.IGNORECASE)
+    if len(parts) < 2:
+        return sql
+    return f"SELECT id, date, description, category, amount FROM {parts[1].strip()}"
+
+
 # ── API: Auth ──────────────────────────────────────────────
 
 @app.route("/api/me")
@@ -631,6 +652,7 @@ def _run_qa_pipeline(question, question_with_context, schema, history, uid, forc
     sql = _fix_ordinal_limit(sql, question)
     sql = _fix_history_id_filter(sql, question)
     sql = _fix_date_filter(sql, question)
+    sql = _fix_show_expenses_aggregate(sql, question)
 
     try:
         conn = db.get_connection()
@@ -651,6 +673,7 @@ def _run_qa_pipeline(question, question_with_context, schema, history, uid, forc
             corrected = _fix_ordinal_limit(corrected, question)
             corrected = _fix_history_id_filter(corrected, question)
             corrected = _fix_date_filter(corrected, question)
+            corrected = _fix_show_expenses_aggregate(corrected, question)
             try:
                 conn2 = db.get_connection()
                 result = conn2.execute(db.text(corrected), {"uid": uid})
