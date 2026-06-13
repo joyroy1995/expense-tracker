@@ -1803,8 +1803,13 @@ function renderDataTable(columns, data) {
   const visibleCols = columns.filter(c => c.toLowerCase() !== 'id');
   if (!visibleCols.length) return '';
   const maxRows = 10;
+
+  if (!window._tableStore) window._tableStore = [];
+  const storeId = 'td-' + window._tableStore.length;
+  window._tableStore.push({ columns: visibleCols, data, shown: maxRows });
+
   const rows = data.slice(0, maxRows);
-  let h = '<div class="chat-data-table"><table><thead><tr>';
+  let h = `<div class="chat-data-table" id="${storeId}"><table><thead><tr>`;
   visibleCols.forEach(c => { h += `<th>${esc(c)}</th>`; });
   h += '</tr></thead><tbody>';
   rows.forEach(r => {
@@ -1820,10 +1825,40 @@ function renderDataTable(columns, data) {
   });
   h += '</tbody></table>';
   if (data.length > maxRows) {
-    h += `<div class="chat-table-more">+${data.length - maxRows} more</div>`;
+    h += `<button class="chat-show-more" onclick="showMoreTable(${window._tableStore.length - 1})">Show more (${data.length - maxRows} remaining)</button>`;
   }
   h += '</div>';
   return h;
+}
+
+function showMoreTable(idx) {
+  const store = window._tableStore[idx];
+  if (!store) return;
+  const el = document.getElementById('td-' + idx);
+  if (!el) return;
+  store.shown = Math.min(store.shown + 10, store.data.length);
+  const rows = store.data.slice(0, store.shown);
+  let h = '<table><thead><tr>';
+  store.columns.forEach(c => { h += `<th>${esc(c)}</th>`; });
+  h += '</tr></thead><tbody>';
+  rows.forEach(r => {
+    h += '<tr>';
+    store.columns.forEach(c => {
+      let v = r[c];
+      if (typeof v === 'number') {
+        v = c.toLowerCase().includes('amount') || c === 'total' ? `৳${v.toFixed(2)}` : v;
+      }
+      h += `<td>${v != null ? esc(String(v)) : ''}</td>`;
+    });
+    h += '</tr>';
+  });
+  h += '</tbody></table>';
+  if (store.shown < store.data.length) {
+    h += `<button class="chat-show-more" onclick="showMoreTable(${idx})">Show more (${store.data.length - store.shown} remaining)</button>`;
+  } else if (store.data.length > 10) {
+    h += `<div class="chat-table-more">Showing all ${store.data.length} entries</div>`;
+  }
+  el.innerHTML = h;
 }
 
 async function sendChatMessage() {

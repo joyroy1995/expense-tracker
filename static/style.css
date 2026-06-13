@@ -1691,6 +1691,22 @@ body {
   text-align: center;
   padding: 4px 0 0;
 }
+.chat-show-more {
+  display: block;
+  width: 100%;
+  margin-top: 4px;
+  padding: 4px;
+  border: 1px dashed var(--border);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--accent);
+  font-size: 11px;
+  cursor: pointer;
+  text-align: center;
+}
+.chat-show-more:hover {
+  background: var(--hover-bg);
+}
 
 /* ── Typing Dots ── */
 .typing-dots {
