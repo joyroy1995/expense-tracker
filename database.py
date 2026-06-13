@@ -974,11 +974,14 @@ def get_budget_status(user_id, month=None):
 
 # ── NL Q&A Schema ────────────────────────────────────────────
 
-_ALL_CATEGORIES = {
-    "Food", "Transport", "Shopping", "Bills", "Entertainment", "Health",
-    "Education", "Rent", "Dining Out", "Fruits", "Groceries", "Travel",
-    "Personal Care", "Gifts", "Investment", "Savings", "Other",
-}
+_ALL_CATEGORIES = [
+    "Bills", "Dining Out", "Education", "Entertainment", "Food",
+    "Fruits", "Gifts", "Groceries", "Health", "Investment",
+    "Other", "Personal Care", "Rent", "Savings", "Shopping",
+    "Transport", "Travel",
+]
+
+SCHEMA_VERSION = 3
 
 
 def get_schema():
@@ -988,8 +991,8 @@ def get_schema():
         text("SELECT DISTINCT category FROM expenses ORDER BY category")
     ).fetchall()
     db_cat_set = {r[0] for r in db_cats}
-    all_cats = sorted(db_cat_set | _ALL_CATEGORIES)
-    cats_str = ", ".join(all_cats)
+    all_cats = sorted(db_cat_set | set(_ALL_CATEGORIES))
+    cats_str = ", ".join(f"'{c}'" for c in all_cats)
     budget_cats = conn.execute(
         text("SELECT DISTINCT category FROM budgets ORDER BY category")
     ).fetchall()
@@ -1005,13 +1008,13 @@ def get_schema():
         date_range = f" (data ranges from {range_row[0]} to {range_row[1]})"
 
     return f"""
-Table: expenses (main table — stores all expense transactions)
+Table: expenses (main table — stores all expense transactions) [schema v{SCHEMA_VERSION}]
 Columns:
 - id (INTEGER): primary key
 - date (TEXT): YYYY-MM-DD format{date_range}
 - description (TEXT): expense description in Banglish/Bengali/English
 - amount (REAL): amount in BDT (always positive)
-- category (TEXT): known categories: {cats_str}
+- category (TEXT): use exact value in WHERE: {cats_str}
 - user_id (INTEGER): foreign key → users.id — owner of the expense
 - created_at (TEXT): timestamp when recorded
 Relationships: expenses.user_id → users.id (each expense belongs to a user)
@@ -1030,7 +1033,7 @@ Table: budgets (recurring monthly spending limits — one row per category per u
 Columns:
 - id (INTEGER): primary key
 - user_id (INTEGER): foreign key → users.id — owner of the budget
-- category (TEXT): categories with budgets: {budget_cats_str}
+- category (TEXT): use exact value in WHERE: {budget_cats_str}
 - amount (REAL): monthly budget amount in BDT
 - created_at (TEXT): timestamp when set
 - updated_at (TEXT): timestamp when last updated
