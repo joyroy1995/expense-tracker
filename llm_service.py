@@ -101,7 +101,7 @@ def _get_model(system_instruction=None):
     if key:
         genai.configure(api_key=key)
     return genai.GenerativeModel(
-        model_name="gemini-2.0-flash-lite",
+        model_name="gemini-1.5-flash",
         system_instruction=system_instruction or SYSTEM_PROMPT,
     )
 
@@ -283,4 +283,6 @@ def predict_expense(description, learned_categories=None):
     if learned_cat:
         amount = extract_amount_fallback(description) or 0
         return {"category": learned_cat, "amount": amount}
-    return extract_expense(description, learned_categories)
+    amount = extract_amount_fallback(description) or 0
+    category = keyword_category(description)
+    return {"category": category, "amount": amount}
