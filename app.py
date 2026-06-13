@@ -127,6 +127,13 @@ def _fix_category_in_sql(sql, question):
         return sql
     m = re.search(r"(?:b\.)?category\s*=\s*'([^']+)'", sql)
     if not m:
+        # Question mentions a category but SQL has no category filter — add one
+        insert_at = len(sql)
+        for kw in [' GROUP BY ', ' ORDER BY ', ' LIMIT ', ' OFFSET ', ' HAVING ']:
+            pos = sql.upper().find(kw)
+            if pos != -1 and pos < insert_at:
+                insert_at = pos
+        sql = sql[:insert_at] + f" AND category = '{mentioned}'" + sql[insert_at:]
         return sql
     sql_cat = m.group(1)
     if sql_cat == mentioned or sql_cat == "__overall__":
