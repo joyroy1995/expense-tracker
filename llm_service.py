@@ -105,6 +105,12 @@ def _get_client():
 def _has_api_key():
     return bool(os.environ.get("GROQ_API_KEY", ""))
 
+_QUESTION_WORDS = {"what", "how", "why", "show", "tell", "list", "give", "which", "when", "where", "who", "did", "do", "does", "is", "are", "was", "were", "can", "could", "would", "will"}
+
+def is_question(text):
+    first = text.strip().lower().split(maxsplit=1)[0].rstrip("?,.")
+    return first in _QUESTION_WORDS or text.strip().endswith("?")
+
 
 def bengali_to_english_num(text):
     bengali_digits = {"০": "0", "১": "1", "২": "2", "৩": "3", "৪": "4", "৫": "5", "৬": "6", "৭": "7", "৮": "8", "৯": "9"}

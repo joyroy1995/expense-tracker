@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 from werkzeug.security import generate_password_hash, check_password_hash
 import re
 import database as db
-from llm_service import extract_expense, predict_expense, extract_keywords, generate_sql, answer_from_results, format_answer, split_expenses, _clean_split_desc, extract_date_reference, clean_date_refs, detect_budget_intent
+from llm_service import extract_expense, predict_expense, extract_keywords, generate_sql, answer_from_results, format_answer, split_expenses, _clean_split_desc, extract_date_reference, clean_date_refs, detect_budget_intent, is_question
 from config import USERNAME, PASSWORD, SECRET_KEY, CATEGORY_COLORS, TIMEZONE, SEED_CATEGORIES
 
 app = Flask(__name__)
@@ -452,6 +452,8 @@ def api_chat():
 
     learned = db.get_learned_categories(session["user_id"])
 
+    skip_expense = is_question(message)
+
     # Extract date reference, then use cleaned text for expense parsing
     cleaned_message, expense_date = extract_date_reference(message, datetime.now(TIMEZONE))
 
@@ -460,28 +462,29 @@ def api_chat():
     if budget_intent:
         return jsonify({"type": "budget", "category": budget_intent["category"], "amount": budget_intent["amount"]})
 
-    # Step 1: Try expense parsing via split_expenses (handles multi & single item)
-    items = split_expenses(cleaned_message)
-    if items and all(item.get("amount", 0) > 0 for item in items):
-        for item in items:
-            item["description"] = clean_date_refs(item.get("description", ""))
-            item["color"] = CATEGORY_COLORS.get(item["category"], "#6b7280")
-        return jsonify({"type": "expense", "date": expense_date, "items": items})
+    if not skip_expense:
+        # Step 1: Try expense parsing via split_expenses (handles multi & single item)
+        items = split_expenses(cleaned_message)
+        if items and all(item.get("amount", 0) > 0 for item in items):
+            for item in items:
+                item["description"] = clean_date_refs(item.get("description", ""))
+                item["color"] = CATEGORY_COLORS.get(item["category"], "#6b7280")
+            return jsonify({"type": "expense", "date": expense_date, "items": items})
 
-    # Step 2: Try single-item prediction
-    prediction = predict_expense(cleaned_message, learned_categories=learned)
-    if prediction and prediction.get("amount", 0) > 0:
-        cat = prediction["category"]
-        return jsonify({
-            "type": "expense",
-            "date": expense_date,
-            "items": [{
-                "description": clean_date_refs(_clean_split_desc(cleaned_message) or cleaned_message),
-                "category": cat,
-                "amount": prediction["amount"],
-                "color": CATEGORY_COLORS.get(cat, "#6b7280"),
-            }]
-        })
+        # Step 2: Try single-item prediction
+        prediction = predict_expense(cleaned_message, learned_categories=learned)
+        if prediction and prediction.get("amount", 0) > 0:
+            cat = prediction["category"]
+            return jsonify({
+                "type": "expense",
+                "date": expense_date,
+                "items": [{
+                    "description": clean_date_refs(_clean_split_desc(cleaned_message) or cleaned_message),
+                    "category": cat,
+                    "amount": prediction["amount"],
+                    "color": CATEGORY_COLORS.get(cat, "#6b7280"),
+                }]
+            })
 
     # Step 3: Fall through to Q&A
     schema = _get_schema_cached()
