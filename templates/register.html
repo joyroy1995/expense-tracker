@@ -7,6 +7,12 @@
     <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90' fill='%236366f1'>৳</text></svg>">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <script>
+      (function(){var t=localStorage.getItem('theme');if(t==='dark'||(!t&&window.matchMedia('(prefers-color-scheme:dark)').matches))document.documentElement.setAttribute('data-theme','dark');})();
+      function syncTheme(){var b=document.getElementById('themeToggle'),d=document.documentElement.getAttribute('data-theme')==='dark';if(b){b.textContent=d?'☀️':'🌙';b.title=d?'Switch to light mode':'Switch to dark mode'}}
+      function toggleTheme(){var h=document.documentElement;if(h.getAttribute('data-theme')==='dark'){h.removeAttribute('data-theme');localStorage.setItem('theme','light')}else{h.setAttribute('data-theme','dark');localStorage.setItem('theme','dark')}syncTheme()}
+      document.addEventListener('DOMContentLoaded',function(){syncTheme();document.getElementById('themeToggle')?.addEventListener('click',toggleTheme);});
+    </script>
 </head>
 <body class="login-page">
     <div class="login-container">
@@ -39,6 +45,8 @@
             <div class="auth-links">
                 <span>Already have an account?</span>
                 <a href="{{ url_for('login') }}">Sign In</a>
+                <span class="auth-sep">|</span>
+                <button id="themeToggle" class="theme-toggle-link" title="Toggle dark mode">🌙</button>
             </div>
         </div>
     </div>

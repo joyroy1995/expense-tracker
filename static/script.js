@@ -1001,9 +1001,15 @@ async function toggleCategoryExpansion(category) {
   loader.innerHTML = `<td colspan="4"><div class="category-expanded-content"><div class="category-expense-list">${body}</div></div></td>`;
 }
 
+function cssVar(name) {
+  return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+}
+
 function initCharts(categoryTotals, monthlyTotals, colors) {
   chartInstances.forEach(c => c.destroy());
   chartInstances = [];
+  const borderColor = cssVar('--border') || '#e2e8f0';
+  const primaryColor = cssVar('--primary') || '#6366f1';
 
   const catCtx = document.getElementById('categoryChart');
   if (catCtx && categoryTotals && categoryTotals.length) {
@@ -1016,7 +1022,7 @@ function initCharts(categoryTotals, monthlyTotals, colors) {
       options: {
         responsive: true, maintainAspectRatio: false,
         plugins: {
-          legend: { position: 'bottom', labels: { padding: 16, usePointStyle: true, pointStyleWidth: 10, font: { size: 12 } } },
+          legend: { position: 'bottom', labels: { padding: 16, usePointStyle: true, pointStyleWidth: 10, font: { size: 12 }, color: cssVar('--text-secondary') } },
           tooltip: { callbacks: { label: (ctx) => {
             const val = ctx.parsed || 0;
             const total = ctx.dataset.data.reduce((a, b) => a + b, 0);
@@ -1038,13 +1044,13 @@ function initCharts(categoryTotals, monthlyTotals, colors) {
     const data = sorted.map(m => m.total);
     chartInstances.push(new Chart(monCtx, {
       type: 'bar',
-      data: { labels, datasets: [{ label: 'Monthly Total', data, backgroundColor: '#6366f1', borderRadius: 6, borderSkipped: false }] },
+      data: { labels, datasets: [{ label: 'Monthly Total', data, backgroundColor: primaryColor, borderRadius: 6, borderSkipped: false }] },
       options: {
         responsive: true, maintainAspectRatio: false,
         plugins: { legend: { display: false }, tooltip: { callbacks: { label: (ctx) => `৳${ctx.parsed.y.toFixed(2)}` } } },
         scales: {
-          y: { beginAtZero: true, ticks: { callback: (v) => `৳${v}` }, grid: { color: '#f1f5f9' } },
-          x: { grid: { display: false } }
+          y: { beginAtZero: true, ticks: { callback: (v) => `৳${v}`, color: cssVar('--text-secondary') }, grid: { color: borderColor } },
+          x: { ticks: { color: cssVar('--text-secondary') }, grid: { display: false } }
         }
       }
     }));
@@ -1441,6 +1447,35 @@ document.getElementById('logoutBtn')?.addEventListener('click', async (e) => {
   currentUser = null;
   navigate('/login');
 });
+
+// Theme toggle handler
+function syncThemeButton() {
+  const btn = document.getElementById('themeToggle');
+  if (!btn) return;
+  const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+  if (btn.classList.contains('theme-toggle-sidebar')) {
+    btn.textContent = isDark ? '☀️ Light Mode' : '🌙 Dark Mode';
+  } else {
+    btn.textContent = isDark ? '☀️' : '🌙';
+  }
+  btn.title = isDark ? 'Switch to light mode' : 'Switch to dark mode';
+}
+
+function toggleTheme() {
+  const html = document.documentElement;
+  const isDark = html.getAttribute('data-theme') === 'dark';
+  if (isDark) {
+    html.removeAttribute('data-theme');
+    localStorage.setItem('theme', 'light');
+  } else {
+    html.setAttribute('data-theme', 'dark');
+    localStorage.setItem('theme', 'dark');
+  }
+  syncThemeButton();
+}
+
+document.addEventListener('DOMContentLoaded', syncThemeButton);
+document.getElementById('themeToggle')?.addEventListener('click', toggleTheme);
 
 async function renderRoute() {
   const { view, params, token } = getRoute();

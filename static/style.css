@@ -1,4 +1,5 @@
 :root {
+    color-scheme: light;
     --primary: #6366f1;
     --primary-hover: #4f46e5;
     --primary-light: #e0e7ff;
@@ -13,6 +14,22 @@
     --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
     --radius: 12px;
     --radius-sm: 8px;
+}
+
+[data-theme="dark"] {
+    color-scheme: dark;
+    --primary: #a5b4fc;
+    --primary-hover: #818cf8;
+    --primary-light: #1e1b4b;
+    --bg: #0c1222;
+    --card-bg: #1a2332;
+    --text: #eef2f8;
+    --text-secondary: #8899b0;
+    --border: #283544;
+    --success: #6ee7b7;
+    --error: #fca5a5;
+    --shadow: 0 1px 3px rgba(0, 0, 0, 0.4), 0 1px 2px rgba(0, 0, 0, 0.3);
+    --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.5), 0 4px 6px -2px rgba(0, 0, 0, 0.3);
 }
 
 * {
@@ -38,10 +55,8 @@ body {
     background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
 }
 
-.login-page .app-footer {
-    color: rgba(255, 255, 255, 0.7);
-    border-top-color: rgba(255, 255, 255, 0.15);
-    margin-top: auto;
+[data-theme="dark"] .login-page {
+    background: linear-gradient(135deg, #1e1b4b 0%, #2e1065 100%);
 }
 
 .app-footer {
@@ -51,6 +66,17 @@ body {
     color: var(--text-secondary);
     border-top: 1px solid var(--border);
     margin-top: 40px;
+}
+
+.login-page .app-footer {
+    color: rgba(255, 255, 255, 0.7);
+    border-top-color: rgba(255, 255, 255, 0.15);
+    margin-top: auto;
+}
+
+/* spinner -> hide footer */
+#app:has(.page-loader) ~ .app-footer {
+    display: none;
 }
 
 .login-container {
@@ -114,6 +140,11 @@ body {
     background-color: #fef2f2;
     color: var(--error);
     border: 1px solid #fecaca;
+}
+
+[data-theme="dark"] .alert-error {
+    background-color: #2d1a1a;
+    border-color: #5c2020;
 }
 
 .sidebar {
@@ -183,8 +214,18 @@ body {
     border-top: 1px solid var(--border);
 }
 
-.sidebar-footer .nav-link {
+.sidebar-footer .nav-link,
+.sidebar-footer .theme-toggle-sidebar {
     width: 100%;
+    background: none;
+    border: none;
+    font-family: inherit;
+    cursor: pointer;
+    text-align: left;
+}
+.sidebar-footer .theme-toggle-sidebar:hover {
+    background: var(--bg);
+    color: var(--text);
 }
 
 .nav-link {
@@ -215,6 +256,10 @@ body {
 
 .nav-logout:hover {
     background: #fef2f2;
+}
+
+[data-theme="dark"] .nav-logout:hover {
+    background: #3b1a1a;
 }
 
 .sidebar-overlay {
@@ -348,6 +393,8 @@ body {
     border-radius: var(--radius-sm);
     font-size: 14px;
     font-family: inherit;
+    color: var(--text);
+    background: var(--card-bg);
     transition: border-color 0.2s, box-shadow 0.2s;
 }
 
@@ -493,6 +540,7 @@ body {
     font-size: 13px;
     font-family: inherit;
     font-weight: 500;
+    color: var(--text);
     background: var(--card-bg);
     cursor: pointer;
     appearance: none;
@@ -663,6 +711,7 @@ body {
     border-radius: var(--radius-sm);
     font-size: 14px;
     font-family: inherit;
+    color: var(--text);
     background: var(--card-bg);
     cursor: pointer;
 }
@@ -788,6 +837,7 @@ body {
   margin-left: auto;
   text-decoration: none;
   font-size: 13px;
+  color: var(--primary);
 }
 
 .page-loader {
@@ -828,6 +878,40 @@ body {
     opacity: 1;
 }
 
+/* ── Theme toggle ────────────────────────────────────────── */
+
+.theme-toggle-btn {
+  background: none;
+  border: none;
+  font-size: 20px;
+  cursor: pointer;
+  padding: 4px 8px;
+  line-height: 1;
+  border-radius: var(--radius-sm);
+  transition: background 0.2s;
+  color: var(--text);
+  flex-shrink: 0;
+}
+.theme-toggle-btn:hover {
+  background: var(--bg);
+}
+
+.theme-toggle-link {
+  background: none;
+  border: none;
+  font-size: 16px;
+  cursor: pointer;
+  padding: 0;
+  line-height: 1;
+  color: var(--primary);
+  font-family: inherit;
+  font-weight: 500;
+  transition: opacity 0.2s;
+}
+.theme-toggle-link:hover {
+  opacity: 0.8;
+}
+
 /* ── Auth links ─────────────────────────────────────────── */
 
 .auth-links {
@@ -862,6 +946,11 @@ body {
     border-radius: var(--radius-sm);
     margin-bottom: 20px;
     font-size: 14px;
+}
+
+[data-theme="dark"] .alert-success {
+    background-color: #0a2a1a;
+    border-color: #14523a;
 }
 
 /* ── Profile page ───────────────────────────────────────── */
@@ -960,6 +1049,11 @@ body {
     color: #d97706;
 }
 
+[data-theme="dark"] .role-superuser {
+    background: #3a2f0a;
+    color: #fbbf24;
+}
+
 .you-badge {
     font-size: 12px;
     color: var(--text-secondary);
@@ -1006,6 +1100,19 @@ body {
 
 .btn-danger:hover {
     background: #fef2f2;
+}
+
+[data-theme="dark"] .btn-danger {
+    border-color: #7f1d1d;
+}
+
+[data-theme="dark"] .btn-danger:hover {
+    background: #3b1a1a;
+}
+
+[data-theme="dark"] select option {
+    background: #1a2332;
+    color: #eef2f8;
 }
 
 /* ── Export buttons ─────────────────────────────────────── */
@@ -1060,6 +1167,7 @@ body {
     border-radius: var(--radius-sm);
     font-size: 14px;
     font-family: inherit;
+    color: var(--text);
     background: var(--card-bg);
     cursor: pointer;
 }
@@ -1100,6 +1208,8 @@ body {
     border-radius: var(--radius-sm);
     font-size: 14px;
     font-family: inherit;
+    color: var(--text);
+    background: var(--card-bg);
     transition: border-color 0.2s, box-shadow 0.2s;
 }
 
@@ -1391,6 +1501,8 @@ body {
   border-radius: var(--radius-sm);
   font-size: 14px;
   font-family: inherit;
+  color: var(--text);
+  background: var(--card-bg);
   transition: border-color 0.2s, box-shadow 0.2s;
 }
 
@@ -1420,19 +1532,25 @@ body {
 }
 
 .chat-sql-block {
-  display: none;
-  margin: 8px 0 0;
-  padding: 8px 10px;
-  background: #1e293b;
-  color: #e2e8f0;
-  border-radius: 6px;
-  font-size: 11px;
-  line-height: 1.5;
-  overflow-x: auto;
-  white-space: pre-wrap;
-  word-break: break-all;
-  max-height: 200px;
-  overflow-y: auto;
+    display: none;
+    margin: 8px 0 0;
+    padding: 8px 10px;
+    background: #1e293b;
+    color: #e2e8f0;
+    border-radius: 6px;
+    font-size: 11px;
+    line-height: 1.5;
+    overflow-x: auto;
+    white-space: pre-wrap;
+    word-break: break-all;
+    max-height: 200px;
+    overflow-y: auto;
+}
+
+[data-theme="dark"] .chat-sql-block {
+    background: #0f172a;
+    color: #cbd5e1;
+    border: 1px solid var(--border);
 }
 
 .chat-sql-visible {
@@ -1617,6 +1735,7 @@ body {
   border-radius: 4px;
   font-size: 13px;
   font-family: inherit;
+  color: var(--text);
   background: var(--card-bg);
 }
 
