@@ -141,6 +141,34 @@ def _fix_sort_order(sql, question):
     return sql[:insert_pos] + ' DESC ' + sql[insert_pos:].lstrip()
 
 
+def _fix_frequency_sql(sql, question):
+    """Post-process SQL to use COUNT(*) instead of SUM when user asks about frequency."""
+    if not re.search(r'\b(?:frequency|how\s+many\s+times|how\s+often|most\s+frequent|most\s+used|by\s+count)\b', question, re.IGNORECASE):
+        return sql
+    sql_upper = sql.upper()
+    # Only modify if the SQL uses SUM(amount) or SUM with a category GROUP BY
+    if 'SUM' not in sql_upper and 'GROUP BY' not in sql_upper:
+        return sql
+    if 'COUNT(*)' in sql_upper or 'COUNT(1)' in sql_upper:
+        return sql
+    # Replace SUM(amount) 0 as total with COUNT(*) as count
+    sql = re.sub(
+        r'COALESCE\(\s*SUM\(\s*amount\s*\)\s*,\s*0\s*\)\s+as\s+total',
+        'COUNT(*) as count',
+        sql,
+        flags=re.IGNORECASE
+    )
+    sql = re.sub(
+        r'SUM\(\s*amount\s*\)\s+as\s+total',
+        'COUNT(*) as count',
+        sql,
+        flags=re.IGNORECASE
+    )
+    # Fix ORDER BY: total DESC → count DESC
+    sql = re.sub(r'ORDER\s+BY\s+total\s+DESC', 'ORDER BY count DESC', sql, flags=re.IGNORECASE)
+    return sql
+
+
 # ── API: Auth ──────────────────────────────────────────────
 
 @app.route("/api/me")
@@ -446,6 +474,7 @@ def _run_qa_pipeline(question, question_with_context, schema, history, uid, forc
     sql = _ensure_user_filter(sql)
     sql = _fix_category_in_sql(sql, question)
     sql = _fix_sort_order(sql, question)
+    sql = _fix_frequency_sql(sql, question)
 
     try:
         conn = db.get_connection()
@@ -459,6 +488,7 @@ def _run_qa_pipeline(question, question_with_context, schema, history, uid, forc
             corrected = _ensure_user_filter(corrected)
             corrected = _fix_category_in_sql(corrected, question)
             corrected = _fix_sort_order(corrected, question)
+            corrected = _fix_frequency_sql(corrected, question)
             try:
                 conn2 = db.get_connection()
                 result = conn2.execute(db.text(corrected), {"uid": uid})

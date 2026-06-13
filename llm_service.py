@@ -286,6 +286,7 @@ Rules:
 10. For the budgets table: amounts are monthly budgets, one row per category. Compare actual spending vs budget using LEFT JOIN and GROUP BY. Exception: for '__overall__' budget (total spending across ALL categories), use a scalar subquery instead of a JOIN on category.
 11. For description search, use LIKE with %% wildcards: description LIKE '%%keyword%%'
 12. When comparing periods, use SUBSTR(date, 1, 7) in GROUP BY or WHERE.
+13. For frequency/count questions ("how many times", "most used category", "in terms of frequency", "how often"), use COUNT(*) instead of SUM(amount). If the user asks which category by frequency, use COUNT(*) as count and ORDER BY count DESC.
 
 Examples:
 
@@ -312,6 +313,9 @@ SQL: SELECT COALESCE(AVG(daily.total), 0) as avg_daily FROM (SELECT SUM(amount) 
 
 Q: How many times did I eat out this month?
 SQL: SELECT COUNT(*) as count FROM expenses WHERE user_id = :uid AND category = 'Dining Out' AND date LIKE '{current_month}%'
+
+Q: Which category did I use the most this month by frequency?
+SQL: SELECT category, COUNT(*) as count FROM expenses WHERE user_id = :uid AND date LIKE '{current_month}%' GROUP BY category ORDER BY count DESC LIMIT 1
 
 Q: How does this month compare to last month?
 SQL: SELECT SUBSTR(date, 1, 7) as month, COALESCE(SUM(amount), 0) as total FROM expenses WHERE user_id = :uid AND (date LIKE '{current_month}%' OR date LIKE '{last_month}%') GROUP BY SUBSTR(date, 1, 7) ORDER BY month
