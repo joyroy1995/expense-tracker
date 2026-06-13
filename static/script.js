@@ -1433,9 +1433,11 @@ function initChatCard() {
   const body = document.getElementById('aiChatBody');
   const icon = document.getElementById('aiChatCollapseIcon');
 
-  // Restore collapse state from localStorage
+  // Restore collapse state from localStorage (mobile defaults to collapsed)
   if (body && icon) {
-    const collapsed = localStorage.getItem('aiChatCollapsed') === 'true';
+    const saved = localStorage.getItem('aiChatCollapsed');
+    const isMobile = window.innerWidth <= 768;
+    const collapsed = saved !== null ? saved === 'true' : isMobile;
     if (collapsed) {
       body.classList.add('chat-body-collapsed');
       icon.textContent = '▶';
