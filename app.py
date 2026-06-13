@@ -101,7 +101,9 @@ def _ensure_user_filter(sql):
 
 
 def _fix_category_in_sql(sql, question):
-    """Post-process generated SQL to fix wrong category filters."""
+    """Post-process generated SQL to fix wrong or missing category filters.
+    Also strips spurious category filters when the question doesn't mention
+    any category (e.g. contamination carried over from conversation history)."""
     question_lower = question.lower()
     mentioned = None
     for cat in sorted(_ALL_CATEGORIES, key=len, reverse=True):
@@ -109,6 +111,19 @@ def _fix_category_in_sql(sql, question):
             mentioned = cat
             break
     if not mentioned:
+        # No category mentioned — strip any spurious category filter
+        # that may have been carried over from history.
+        # Preserve __overall__ (budget pseudo-category).
+        if re.search(r"(?:b\.)?category\s*=\s*'__overall__'", sql, re.IGNORECASE):
+            return sql
+        sql = re.sub(
+            r'\s+AND\s+(?:b\.)?category\s*=\s*\'[^\']*\'',
+            '', sql, flags=re.IGNORECASE,
+        )
+        sql = re.sub(
+            r'\s+WHERE\s+(?:b\.)?category\s*=\s*\'[^\']*\' AND ',
+            ' WHERE ', sql, flags=re.IGNORECASE,
+        )
         return sql
     m = re.search(r"(?:b\.)?category\s*=\s*'([^']+)'", sql)
     if not m:
