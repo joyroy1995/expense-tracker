@@ -2,7 +2,7 @@ from groq import Groq
 import json
 import re
 import os
-from datetime import date, timedelta
+from datetime import date as _d, timedelta, date
 from config import SEED_CATEGORIES
 
 CATEGORIES = [
@@ -250,7 +250,17 @@ def _fmt_history(history):
     return "\n".join(lines)
 
 
-SQL_PROMPT = """You are a SQL query generator for a personal expense tracker. Given a user's natural language question, generate a SQL query to answer it.
+def _fmt_dates():
+    today = date.today()
+    ym = today.strftime("%Y-%m")
+    prev = (today.replace(day=1) - timedelta(days=1)).strftime("%Y-%m")
+    return today.strftime("%Y-%m-%d"), ym, prev, today.strftime("%Y")
+
+SQL_PROMPT = """You are a SQL query generator for a personal expense tracker. Given a user's natural language question and the current date, generate a SQL query to answer it.
+
+Current date: {today}
+This month: {current_month}
+Last month: {last_month}
 
 Database schema:
 {schema}
@@ -259,29 +269,72 @@ Rules:
 1. Return ONLY the SQL query — no explanation, no markdown formatting, no backticks.
 2. Use ONLY SELECT queries.
 3. Always include "user_id = :uid" in the WHERE clause.
-4. Use SQLite-compatible syntax.
-5. For date filtering use LIKE: date LIKE '2026-06%'
-6. Use SUBSTR(date, 1, 4) for year, SUBSTR(date, 1, 7) for year-month.
-7. Column names: id, date, description, amount, category, user_id, created_at
-8. Use COALESCE for safe SUM.
-9. Limit results to 50 rows max.
-10. Use single quotes for strings.
+4. Use SQLite-compatible syntax (no PostgreSQL-specific functions).
+5. For date filtering:
+   - Use LIKE with pattern: date LIKE '{current_month}%'
+   - Use SUBSTR(date, 1, 4) for year extraction
+   - Use SUBSTR(date, 1, 7) for year-month extraction
+   - For date ranges use date >= 'YYYY-MM-DD' AND date <= 'YYYY-MM-DD'
+   - Derive dates relative to "{today}" (today)
+6. Column names: id, date, description, amount, category, user_id, created_at
+7. Use COALESCE for safe SUM/AVG aggregates.
+8. Limit results to 50 rows max unless the user asks for a specific number.
+9. Use single quotes for strings.
+10. For the budgets table: amounts are monthly budgets, one row per category. Compare actual spending vs budget using LEFT JOIN and GROUP BY.
+11. For description search, use LIKE with %% wildcards: description LIKE '%%keyword%%'
+12. When comparing periods, use SUBSTR(date, 1, 7) in GROUP BY or WHERE.
 
 Examples:
+
 Q: How much on Transport this month?
-SQL: SELECT SUM(amount) as total, COUNT(*) as count FROM expenses WHERE user_id = :uid AND category = 'Transport' AND date LIKE '2026-06%'
+SQL: SELECT COALESCE(SUM(amount), 0) as total, COUNT(*) as count FROM expenses WHERE user_id = :uid AND category = 'Transport' AND date LIKE '{current_month}%'
 
-Q: Show all Dining Out expenses from June
-SQL: SELECT date, description, amount FROM expenses WHERE user_id = :uid AND category = 'Dining Out' AND date LIKE '2026-06%' ORDER BY date
+Q: Show all my Dining Out expenses from last month
+SQL: SELECT date, description, amount FROM expenses WHERE user_id = :uid AND category = 'Dining Out' AND date LIKE '{last_month}%' ORDER BY date
 
-Q: What categories did I spend on in June?
-SQL: SELECT category, SUM(amount) as total, COUNT(*) as count FROM expenses WHERE user_id = :uid AND date LIKE '2026-06%' GROUP BY category ORDER BY total DESC
+Q: What categories did I spend on this month?
+SQL: SELECT category, COALESCE(SUM(amount), 0) as total, COUNT(*) as count FROM expenses WHERE user_id = :uid AND date LIKE '{current_month}%' GROUP BY category ORDER BY total DESC
+
+Q: How much did I spend in the last 7 days?
+SQL: SELECT COALESCE(SUM(amount), 0) as total FROM expenses WHERE user_id = :uid AND date >= date('{today}', '-7 days')
+
+Q: What was my most expensive expense this month?
+SQL: SELECT date, description, amount, category FROM expenses WHERE user_id = :uid AND date LIKE '{current_month}%' ORDER BY amount DESC LIMIT 1
+
+Q: Average daily spending this month
+SQL: SELECT COALESCE(AVG(daily.total), 0) as avg_daily FROM (SELECT SUM(amount) as total FROM expenses WHERE user_id = :uid AND date LIKE '{current_month}%' GROUP BY date) daily
+
+Q: How many times did I eat out this month?
+SQL: SELECT COUNT(*) as count FROM expenses WHERE user_id = :uid AND category = 'Dining Out' AND date LIKE '{current_month}%'
+
+Q: How does this month compare to last month?
+SQL: SELECT SUBSTR(date, 1, 7) as month, COALESCE(SUM(amount), 0) as total FROM expenses WHERE user_id = :uid AND (date LIKE '{current_month}%' OR date LIKE '{last_month}%') GROUP BY SUBSTR(date, 1, 7) ORDER BY month
+
+Q: Which categories did I spend more than 1000 on this month?
+SQL: SELECT category, COALESCE(SUM(amount), 0) as total FROM expenses WHERE user_id = :uid AND date LIKE '{current_month}%' GROUP BY category HAVING total > 1000 ORDER BY total DESC
+
+Q: Show me all expenses where I used Uber or Pathao
+SQL: SELECT date, description, amount, category FROM expenses WHERE user_id = :uid AND (description LIKE '%uber%' OR description LIKE '%pathao%') ORDER BY date DESC LIMIT 50
+
+Q: How much budget is left for Groceries this month?
+SQL: SELECT b.category, b.amount as budget_amount, COALESCE(SUM(e.amount), 0) as spent, b.amount - COALESCE(SUM(e.amount), 0) as remaining FROM budgets b LEFT JOIN expenses e ON e.user_id = b.user_id AND e.category = b.category AND e.date LIKE '{current_month}%' WHERE b.user_id = :uid AND b.category = 'Groceries' GROUP BY b.id, b.category, b.amount
+
+Q: What are the top 5 categories I spend the most on this year?
+SQL: SELECT category, COALESCE(SUM(amount), 0) as total FROM expenses WHERE user_id = :uid AND date LIKE '{current_year}%' GROUP BY category ORDER BY total DESC LIMIT 5
+
+Q: Show all expenses from this week
+SQL: SELECT date, description, amount, category FROM expenses WHERE user_id = :uid AND date >= date('{today}', 'weekday 0', '-6 days') AND date <= '{today}' ORDER BY date
+
+Q: How much did I spend on weekends this month?
+SQL: SELECT COALESCE(SUM(amount), 0) as total FROM expenses WHERE user_id = :uid AND date LIKE '{current_month}%' AND CAST(strftime('%%w', date) AS INTEGER) IN (0, 6)
 
 Q: {question}
 SQL:"""
 
 
-ANSWER_PROMPT = """You are a friendly Bangladeshi personal finance assistant. Given a user's question, the SQL query used, and the results, provide a clear and concise natural language answer.
+ANSWER_PROMPT = """You are a friendly Bangladeshi personal finance assistant. Today is {today}.
+
+Given a user's question, the SQL query used, and the results, provide a clear and concise natural language answer.
 
 Question: {question}
 SQL: {sql}
@@ -292,43 +345,107 @@ Rules:
 - If results are empty, say so politely.
 - Use ৳ symbol for BDT amounts.
 - Round amounts to 2 decimal places.
-- Be specific and helpful.
+- For comparison questions, mention the actual values being compared.
+- For budget questions, mention remaining or overspent amount if relevant.
+- Be specific and helpful (mention category names, dates, amounts).
 - Do NOT mention SQL or technical details unless the user specifically asks.
 
 Answer:"""
 
 
-def generate_sql(question, schema):
+def generate_sql(question, schema, retries=1):
     if not _has_api_key():
         return None
-    prompt = SQL_PROMPT.format(schema=schema, question=question)
+    today, current_month, last_month, current_year = _fmt_dates()
+    prompt = SQL_PROMPT.format(
+        today=today, current_month=current_month, last_month=last_month,
+        current_year=current_year, schema=schema, question=question,
+    )
+    last_error = None
+    for attempt in range(retries + 1):
+        try:
+            client = _get_client()
+            response = client.chat.completions.create(
+                model="llama-3.1-8b-instant",
+                messages=[
+                    {"role": "system", "content": "You are a SQL query generator. Return only the SQL query."},
+                    {"role": "user", "content": prompt},
+                ],
+                temperature=0.1,
+                max_tokens=250,
+            )
+            sql = response.choices[0].message.content.strip().strip("```").strip()
+            if sql.lower().startswith("sql"):
+                sql = sql[3:].strip()
+            if sql.upper().startswith("SELECT") and "user_id = :uid" in sql:
+                return sql
+            if attempt < retries:
+                prompt += "\n\nThe previous SQL was invalid. Make sure it starts with SELECT and includes user_id = :uid in the WHERE clause."
+            else:
+                last_error = "Generated SQL missing SELECT or :uid filter"
+        except Exception as e:
+            last_error = str(e)
+            if attempt < retries:
+                prompt += f"\n\nThere was an error: {last_error}. Please generate a corrected SQL query."
+    if last_error:
+        raise RuntimeError(f"SQL generation failed after {retries + 1} attempts: {last_error}")
+    return None
+
+
+CORRECT_SQL_PROMPT = """The SQL query below failed to execute. Fix it based on the error message.
+Return ONLY the corrected SQL query — no explanation, no backticks.
+
+Original SQL: {sql}
+Error: {error}
+Database schema:
+{schema}
+Original question: {question}
+
+Rules:
+- Return only the corrected SQL query
+- Must be a SELECT statement
+- Must include user_id = :uid in the WHERE clause
+- Use SQLite-compatible syntax
+
+Corrected SQL:"""
+
+
+def correct_sql(sql, error, schema, question):
+    """Attempt to fix a failed SQL query using the actual database error."""
+    if not _has_api_key():
+        return None
+    prompt = CORRECT_SQL_PROMPT.format(sql=sql, error=error, schema=schema, question=question)
     try:
         client = _get_client()
         response = client.chat.completions.create(
             model="llama-3.1-8b-instant",
             messages=[
-                {"role": "system", "content": "You are a SQL query generator. Return only the SQL query."},
+                {"role": "system", "content": "You are a SQL query fixer. Return only the corrected SQL."},
                 {"role": "user", "content": prompt},
             ],
             temperature=0.1,
-            max_tokens=150,
+            max_tokens=200,
         )
-        sql = response.choices[0].message.content.strip().strip("```").strip()
-        if sql.lower().startswith("sql"):
-            sql = sql[3:].strip()
-        if sql.lower().startswith("select") or sql.upper().startswith("SELECT"):
-            return sql
+        fixed = response.choices[0].message.content.strip().strip("```").strip()
+        if fixed.lower().startswith("sql"):
+            fixed = fixed[3:].strip()
+        if fixed.upper().startswith("SELECT") and "user_id = :uid" in fixed:
+            return fixed
         return None
-    except Exception as e:
-        raise e
+    except Exception:
+        return None
 
 
 def answer_from_results(question, sql, results, history=None):
     if not _has_api_key():
         return None
+    today = _d.today().strftime("%B %d, %Y")
     results_str = json.dumps(results, indent=2, ensure_ascii=False)
     hist_text = _fmt_history(history)
-    prompt = ANSWER_PROMPT.format(question=question, sql=sql, results=results_str, history=hist_text)
+    prompt = ANSWER_PROMPT.format(
+        question=question, sql=sql, results=results_str,
+        history=hist_text, today=today,
+    )
     try:
         client = _get_client()
         response = client.chat.completions.create(
@@ -338,7 +455,7 @@ def answer_from_results(question, sql, results, history=None):
                 {"role": "user", "content": prompt},
             ],
             temperature=0.1,
-            max_tokens=200,
+            max_tokens=300,
         )
         return response.choices[0].message.content.strip()
     except Exception:
@@ -351,42 +468,91 @@ def format_answer(columns, data, question):
         return "No expenses found matching your question."
 
     c_lower = [c.lower() for c in columns]
-    amt_col = next((c for c in columns if c.lower() in ("total", "amount", "sum")), None)
+    amt_col = next((c for c in columns if c.lower() in ("total", "amount", "sum", "spent", "remaining")), None)
     cnt_col = next((c for c in columns if c.lower() in ("count", "cnt")), None)
     cat_col = next((c for c in columns if c.lower() == "category"), None)
     desc_col = next((c for c in columns if c.lower() in ("description", "desc")), None)
     date_col = next((c for c in columns if c.lower() == "date"), None)
+    month_col = next((c for c in columns if c.lower() in ("month", "year_month")), None)
+    avg_col = next((c for c in columns if c.lower() in ("avg", "average", "avg_daily")), None)
+    max_col = next((c for c in columns if c.lower() in ("max", "maximum")), None)
+    min_col = next((c for c in columns if c.lower() in ("min", "minimum")), None)
+    remaining_col = next((c for c in columns if c.lower() == "remaining"), None)
+    budget_col = next((c for c in columns if c.lower() in ("budget_amount", "budget")), None)
 
-    # Single row aggregate (SUM, COUNT, etc.)
-    if len(data) == 1 and not cat_col:
+    # --- Budget remaining / status ---
+    if remaining_col is not None and budget_col is not None:
         row = data[0]
-        total = row.get(amt_col) if amt_col else None
-        count = row.get(cnt_col) if cnt_col else None
-        if total is not None and count is not None:
-            return f"Your total is ৳{float(total):.2f} across {int(count)} transaction(s)."
-        if total is not None:
-            return f"Your total is ৳{float(total):.2f}."
-        if count is not None:
-            return f"That's {int(count)} transaction(s)."
+        remaining = float(row.get(remaining_col, 0))
+        budget = float(row.get(budget_col, 0))
+        spent = float(row.get(amt_col, 0)) if amt_col else 0
+        cat = row.get(cat_col, "") if cat_col else ""
+        prefix = f" for {cat}" if cat else ""
+        if remaining > 0:
+            return f"You have ৳{remaining:.2f} remaining{prefix} (spent ৳{spent:.2f} of ৳{budget:.2f} budget)."
+        elif remaining == 0:
+            return f"You have used your entire budget{prefix} (৳{budget:.2f})."
+        else:
+            return f"You have exceeded your budget{prefix} by ৳{abs(remaining):.2f} (spent ৳{spent:.2f} of ৳{budget:.2f})."
 
-    # Single result with description (detail query)
+    # --- Single or multi-month comparison ---
+    if month_col and amt_col and len(data) >= 2:
+        rows_sorted = sorted(data, key=lambda r: r.get(month_col, ""))
+        labels = []
+        for r in rows_sorted:
+            m = r.get(month_col, "")
+            t = float(r.get(amt_col, 0))
+            labels.append(f"{m} (৳{t:.2f})")
+        return f"Monthly totals: {', '.join(labels)}."
+
+    # --- Average value ---
+    if avg_col:
+        avg = float(data[0].get(avg_col, 0))
+        cnt_val = float(data[0].get(cnt_col, 0)) if cnt_col else 0
+        if cnt_val:
+            return f"Average daily spending is ৳{avg:.2f} across {int(cnt_val)} day(s)."
+        return f"Average is ৳{avg:.2f}."
+
+    # --- Single aggregate (SUM, COUNT) ---
+    if len(data) == 1 and not cat_col and not month_col:
+        row = data[0]
+        total = float(row.get(amt_col, 0)) if amt_col else None
+        count = int(row.get(cnt_col, 0)) if cnt_col else None
+        if total is not None and count is not None:
+            return f"Your total is ৳{total:.2f} across {count} transaction(s)."
+        if total is not None:
+            return f"Your total is ৳{total:.2f}."
+        if count is not None:
+            return f"That's {count} transaction(s)."
+
+    # --- Single result with description ---
     if len(data) == 1 and desc_col and amt_col:
         row = data[0]
         desc = row.get(desc_col, "")
-        amt = float(row.get(amt_col, 0))
+        amt_val = float(row.get(amt_col, 0))
         date_val = row.get(date_col, "") if date_col else ""
-        base = f"৳{amt:.2f} for \"{desc}\""
+        base = f"৳{amt_val:.2f} for \"{desc}\""
         if date_val:
             base += f" on {date_val}"
         return f"It was {base}."
 
-    # Category breakdown
-    if cat_col and amt_col:
+    # --- Single result max/min ---
+    if len(data) == 1 and (max_col or min_col):
+        row = data[0]
+        val = float(row.get(max_col or min_col, 0))
+        desc = row.get(desc_col, "")
+        cat = row.get(cat_col, "")
+        suffix = f" ({desc})" if desc else f" in {cat}" if cat else ""
+        label = "Most" if max_col else "Least"
+        return f"{label} expensive{suffix}: ৳{val:.2f}."
+
+    # --- Category breakdown ---
+    if cat_col and amt_col and len(data) > 1:
         total = sum(float(r.get(amt_col, 0)) for r in data)
         top = max(data, key=lambda r: float(r.get(amt_col, 0)))
         return f"Total: ৳{total:.2f} across {len(data)} categories. Most spent on {top[cat_col]} (৳{float(top[amt_col]):.2f})."
 
-    # General list
+    # --- General list ---
     total = sum(float(r.get(amt_col, 0)) for r in data) if amt_col else 0
     info = f" totaling ৳{total:.2f}" if amt_col else ""
     return f"Found {len(data)} result(s){info}."

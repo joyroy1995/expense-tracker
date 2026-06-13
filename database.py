@@ -5,6 +5,8 @@ from werkzeug.security import generate_password_hash
 from flask import g
 import flask
 import secrets
+import hashlib
+import re
 
 _engine = None
 _db_init_done = False
@@ -217,6 +219,42 @@ def _init_schema(conn):
             )
         """)
     )
+    if _is_postgres():
+        conn.execute(
+            text("""
+                CREATE TABLE IF NOT EXISTS qa_cache (
+                    id SERIAL PRIMARY KEY,
+                    query_hash TEXT NOT NULL,
+                    normalized_query TEXT NOT NULL,
+                    sql TEXT NOT NULL,
+                    schema_hash TEXT NOT NULL,
+                    last_used_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    hit_count INTEGER DEFAULT 1,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+        )
+        conn.execute(
+            text("CREATE INDEX IF NOT EXISTS idx_qa_cache_hash ON qa_cache(query_hash)")
+        )
+    else:
+        conn.execute(
+            text("""
+                CREATE TABLE IF NOT EXISTS qa_cache (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    query_hash TEXT NOT NULL,
+                    normalized_query TEXT NOT NULL,
+                    sql TEXT NOT NULL,
+                    schema_hash TEXT NOT NULL,
+                    last_used_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    hit_count INTEGER DEFAULT 1,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+        )
+        conn.execute(
+            text("CREATE INDEX IF NOT EXISTS idx_qa_cache_hash ON qa_cache(query_hash)")
+        )
 
 
 def get_connection():
@@ -950,31 +988,165 @@ def get_schema():
     budget_cats_display = [("Overall (total spending)" if r[0] == OVERALL_BUDGET_CATEGORY else r[0]) for r in budget_cats]
     budget_cats_str = ", ".join(budget_cats_display) if budget_cats_display else "none set"
 
+    # Get date range of expenses
+    range_row = conn.execute(
+        text("SELECT MIN(date) as first, MAX(date) as last FROM expenses")
+    ).fetchone()
+    date_range = ""
+    if range_row and range_row[0] and range_row[1]:
+        date_range = f" (data ranges from {range_row[0]} to {range_row[1]})"
+
     return f"""
-Table: expenses
+Table: expenses (main table — stores all expense transactions)
 Columns:
 - id (INTEGER): primary key
-- date (TEXT): YYYY-MM-DD format
+- date (TEXT): YYYY-MM-DD format{date_range}
 - description (TEXT): expense description in Banglish/Bengali/English
-- amount (REAL): amount in BDT
+- amount (REAL): amount in BDT (always positive)
 - category (TEXT): known categories: {cats_str}
-- user_id (INTEGER): owner of the expense
+- user_id (INTEGER): foreign key → users.id — owner of the expense
 - created_at (TEXT): timestamp when recorded
+Relationships: expenses.user_id → users.id (each expense belongs to a user)
 
 Table: users
 Columns:
 - id (INTEGER): primary key
-- username (TEXT)
+- username (TEXT): login name
+- password_hash (TEXT): hashed password (not queryable)
 - role (TEXT): 'user' or 'superuser'
 - created_at (TEXT): timestamp
+Relationships: users.id ← expenses.user_id (a user has many expenses)
+             users.id ← budgets.user_id (a user has many budgets)
 
-Table: budgets
+Table: budgets (recurring monthly spending limits — one row per category per user)
 Columns:
 - id (INTEGER): primary key
-- user_id (INTEGER): owner of the budget
+- user_id (INTEGER): foreign key → users.id — owner of the budget
 - category (TEXT): categories with budgets: {budget_cats_str}
 - amount (REAL): monthly budget amount in BDT
 - created_at (TEXT): timestamp when set
 - updated_at (TEXT): timestamp when last updated
-Budgets are recurring monthly — one budget per category, reset each month.
+Relationships: budgets.user_id → users.id (each budget belongs to a user)
+Semantics: budgets are recurring monthly limits. A budget resets each month.
+           To compare spending vs budget in a given month, LEFT JOIN budgets → expenses
+           on user_id AND category AND SUBSTR(expenses.date, 1, 7) = target_month.
 """
+
+
+# ── NL Q&A Semantic Caching ─────────────────────────────────
+
+_STOP_WORDS = frozenset({
+    "me", "my", "the", "a", "an", "did", "do", "does", "is", "are",
+    "was", "were", "of", "in", "on", "at", "to", "for", "with",
+    "how", "what", "why", "show", "tell", "list", "give", "which",
+    "when", "where", "who", "all", "total", "spending", "expenses",
+    "much", "many", "please", "can", "could", "would", "will",
+    "am", "be", "been", "being", "have", "has", "had", "do", "does",
+    "did", "but", "or", "if", "so", "up", "down", "out", "just",
+    "about", "than", "too", "also", "very", "some", "any", "every",
+})
+
+
+def _normalize_question(q):
+    """Normalize a question for fuzzy cache matching."""
+    q = q.lower()
+    q = re.sub(r'[^\w\s]', ' ', q)
+    q = re.sub(r'\s+', ' ', q).strip()
+    tokens = [w for w in q.split() if w not in _STOP_WORDS and len(w) > 1]
+    return ' '.join(sorted(set(tokens)))
+
+
+def _schema_hash(schema_str):
+    """Return a stable hash of the schema string to detect schema changes."""
+    return hashlib.sha256(schema_str.encode()).hexdigest()[:16]
+
+
+def cache_qa_sql(question, sql, schema_str):
+    """Store a generated SQL query in the cache."""
+    conn = get_connection()
+    normalized = _normalize_question(question)
+    qhash = hashlib.sha256(normalized.encode()).hexdigest()
+    shash = _schema_hash(schema_str)
+    now = datetime.now(TIMEZONE).strftime("%Y-%m-%d %H:%M:%S")
+
+    # Check if exists
+    existing = conn.execute(
+        text("SELECT id, hit_count FROM qa_cache WHERE query_hash = :h AND schema_hash = :s"),
+        {"h": qhash, "s": shash},
+    ).fetchone()
+
+    if existing:
+        conn.execute(
+            text("UPDATE qa_cache SET last_used_at = :n, hit_count = hit_count + 1 WHERE id = :id"),
+            {"n": now, "id": existing[0]},
+        )
+    else:
+        conn.execute(
+            text("""
+                INSERT INTO qa_cache (query_hash, normalized_query, sql, schema_hash, last_used_at, created_at)
+                VALUES (:h, :nq, :sql, :sh, :n, :n)
+            """),
+            {"h": qhash, "nq": normalized, "sql": sql, "sh": shash, "n": now},
+        )
+    conn.commit()
+
+
+_FUZZY_THRESHOLD = 0.75
+
+
+def _token_jaccard(a, b):
+    """Jaccard similarity of token sets."""
+    if not a or not b:
+        return 0.0
+    sa, sb = set(a.split()), set(b.split())
+    if not sa or not sb:
+        return 0.0
+    intersection = sa & sb
+    if not intersection:
+        return 0.0
+    return len(intersection) / len(sa | sb)
+
+
+def get_cached_sql(question, schema_str):
+    """Look up a cached SQL query by semantic similarity. Returns dict or None."""
+    conn = get_connection()
+    normalized = _normalize_question(question)
+    qhash = hashlib.sha256(normalized.encode()).hexdigest()
+    shash = _schema_hash(schema_str)
+
+    # 1. Try exact hash match (fast path)
+    row = conn.execute(
+        text("""
+            SELECT sql FROM qa_cache
+            WHERE query_hash = :h AND schema_hash = :s
+            ORDER BY last_used_at DESC LIMIT 1
+        """),
+        {"h": qhash, "s": shash},
+    ).fetchone()
+    if row:
+        return {"sql": row[0], "hit": True}
+
+    # 2. Try token-subset / Jaccard fuzzy match
+    rows = conn.execute(
+        text("SELECT normalized_query, sql FROM qa_cache WHERE schema_hash = :s"),
+        {"s": shash},
+    ).fetchall()
+
+    norm_tokens = set(normalized.split())
+    best_sql = None
+    best_score = 0.0
+
+    for r in rows:
+        cached_tokens = set(r[0].split())
+        # Subset check: one is fully contained in the other
+        if norm_tokens and cached_tokens and (norm_tokens <= cached_tokens or cached_tokens <= norm_tokens):
+            score = len(norm_tokens & cached_tokens) / min(len(norm_tokens), len(cached_tokens))
+        else:
+            score = _token_jaccard(normalized, r[0])
+        if score > best_score:
+            best_score = score
+            best_sql = r[1]
+
+    if best_score >= _FUZZY_THRESHOLD and best_sql:
+        return {"sql": best_sql, "hit": False}
+    return None

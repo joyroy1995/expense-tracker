@@ -1677,11 +1677,23 @@ function stopVoiceInput() {
 }
 
 function getWelcomeHtml() {
+  let chips = '';
+  const pool = cachedSuggestions.length ? cachedSuggestions : FALLBACK_SUGGESTIONS;
+  const picks = pool.sort(() => Math.random() - 0.5).slice(0, 3);
+  if (picks.length) {
+    chips = `<div class="chat-suggestion-chips">`;
+    picks.forEach(s => {
+      const safe = s.replace(/'/g, "\\'");
+      chips += `<button class="chat-suggestion-chip" onclick="sendSuggestion('${safe}')">${esc(s)}</button>`;
+    });
+    chips += `</div>`;
+  }
   return `<div class="chat-message ai-message">
     <div class="chat-bubble ai-bubble welcome-bubble">
       Ask me about your expenses, or just type them to log!<br>
       <small>e.g., <em>"biryani 250"</em> or <em>"rickshaw 50 ar coffee 120"</em></small>
     </div>
+    ${chips}
   </div>`;
 }
 
@@ -1690,16 +1702,27 @@ function addChatMessage(type, content, sql, data, columns, suggestions) {
   renderChatMessages();
 }
 
-const SUGGESTIONS_POOL = [
+const FALLBACK_SUGGESTIONS = [
   "How does this compare to last month?",
   "Show me the breakdown by category",
   "What was my biggest expense?",
-  "What did I spend most on this month?",
-  "Show me all expenses over ৳1000",
   "What's my average daily spending?",
   "How much did I spend on groceries?",
-  "What's my total spending on transport?",
 ];
+
+let cachedSuggestions = [];
+
+async function fetchSuggestions() {
+  const res = await api.get('/api/suggestions');
+  if (res.ok && res.data.suggestions && res.data.suggestions.length) {
+    cachedSuggestions = res.data.suggestions;
+    return res.data.suggestions;
+  }
+  // Fallback to random from static pool
+  const shuffled = [...FALLBACK_SUGGESTIONS].sort(() => Math.random() - 0.5);
+  cachedSuggestions = shuffled.slice(0, 3);
+  return cachedSuggestions;
+}
 
 function renderChatMessages() {
   const container = document.getElementById('chatMessages');
@@ -1867,7 +1890,7 @@ async function sendChatMessage() {
     }
 
     // Q&A response
-    const suggestions = pickSuggestions(message, d.answer);
+    const suggestions = await pickSuggestions(message, d.answer);
     addChatMessage('ai', d.answer || 'I found ' + (d.data ? d.data.length : 0) + ' result(s).', d.sql, d.data, d.columns, suggestions);
 
     const body = document.getElementById('aiChatBody');
@@ -1949,23 +1972,17 @@ async function refreshHomeData() {
   }
 }
 
-function pickSuggestions(question, answer) {
-  const q = question.toLowerCase();
-  const pool = [...SUGGESTIONS_POOL];
-  const picks = [];
-
-  // Remove the current question pattern from pool
-  const filtered = pool.filter(s => {
-    const sl = s.toLowerCase();
-    return !q.includes(sl) || sl.includes(q);
-  });
-
-  // Pick 3 random from filtered
-  for (let i = 0; i < 3 && filtered.length; i++) {
-    const idx = Math.floor(Math.random() * filtered.length);
-    picks.push(filtered.splice(idx, 1)[0]);
+async function pickSuggestions(question, answer) {
+  // Try to fetch fresh suggestions from the API, fall back to cached
+  const res = await api.get('/api/suggestions');
+  if (res.ok && res.data.suggestions && res.data.suggestions.length) {
+    cachedSuggestions = res.data.suggestions;
+    return res.data.suggestions;
   }
-  return picks;
+  // Use cached or fallback pool
+  if (cachedSuggestions.length) return cachedSuggestions;
+  const shuffled = [...FALLBACK_SUGGESTIONS].sort(() => Math.random() - 0.5);
+  return shuffled.slice(0, 3);
 }
 
 function sendSuggestion(text) {
@@ -1984,6 +2001,8 @@ async function init() {
   if (me.ok) {
     currentUser = me.data;
   }
+  // Pre-fetch suggestions for welcome screen
+  await fetchSuggestions();
   renderRoute();
 }
 

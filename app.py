@@ -3,8 +3,9 @@ from functools import wraps
 from datetime import datetime, timedelta
 from werkzeug.security import generate_password_hash, check_password_hash
 import re
+import random
 import database as db
-from llm_service import extract_expense, predict_expense, extract_keywords, generate_sql, answer_from_results, format_answer, split_expenses, _clean_split_desc, extract_date_reference, clean_date_refs, detect_budget_intent, is_question, transcribe_audio
+from llm_service import extract_expense, predict_expense, extract_keywords, generate_sql, correct_sql, answer_from_results, format_answer, split_expenses, _clean_split_desc, extract_date_reference, clean_date_refs, detect_budget_intent, is_question, transcribe_audio
 from config import USERNAME, PASSWORD, SECRET_KEY, CATEGORY_COLORS, TIMEZONE, SEED_CATEGORIES
 
 app = Flask(__name__)
@@ -41,6 +42,15 @@ def superuser_required(f):
 
 # ── SQL safety validation ─────────────────────────────────
 
+# Known tables and columns for schema validation
+_KNOWN_TABLES = {"expenses", "users", "budgets", "learned_categories", "password_resets"}
+_KNOWN_COLUMNS = {
+    "expenses": {"id", "date", "description", "amount", "category", "user_id", "created_at"},
+    "users": {"id", "username", "password_hash", "role", "created_at"},
+    "budgets": {"id", "user_id", "category", "amount", "created_at", "updated_at"},
+}
+
+
 def _validate_sql(sql):
     s = sql.strip()
     while s.endswith(";"):
@@ -54,6 +64,18 @@ def _validate_sql(sql):
     for word in words:
         if word in forbidden:
             return False
+
+    # Basic paren balancing
+    if s.count("(") != s.count(")"):
+        return False
+
+    # Check referenced tables exist in known schema
+    # Match table names after FROM/JOIN (excluding subqueries)
+    table_refs = re.findall(r'(?:FROM|JOIN)\s+(\w+)', s, re.IGNORECASE)
+    for t in table_refs:
+        if t.lower() not in _KNOWN_TABLES:
+            return False
+
     return True
 
 
@@ -378,6 +400,15 @@ COMPLEX_KEYWORDS = [
     "insight", "summarize", "summary", "overview",
     "improve", "save", "reduce", "cut",
     "increased", "decreased", "rose", "fell",
+    "budget", "budget left", "budget remaining", "exceed", "overspend",
+    "remaining", "left",
+    "percentage", "percent", "ratio",
+    "change", "growth", "decline",
+    "average", "avg", "mean",
+    "highest", "lowest", "most", "least", "top", "bottom",
+    "do i spend more", "do i spend less",
+    "on track", "how am i doing",
+    "monthly comparison", "month over month",
 ]
 
 def _needs_llm_answer(question):
@@ -399,17 +430,27 @@ def api_ask():
 
     schema = _get_schema_cached()
     current_date = datetime.now(TIMEZONE).strftime("%B %d, %Y")
-    question_with_context = f"Today is {current_date}.\n\nQuestion: {question}"
+    cleaned_for_date, expense_date = extract_date_reference(question, datetime.now(TIMEZONE))
+    date_context = f"Today is {current_date}."
+    if expense_date:
+        date_context += f" The user is referring to date {expense_date}."
+    question_with_context = f"{date_context}\n\nQuestion: {question}"
 
-    try:
-        sql = generate_sql(question_with_context, schema)
-    except Exception as e:
-        return jsonify({"error": f"LLM query failed: {str(e)}"}), 500
-    if not sql:
-        return jsonify({"error": "Could not generate SQL query. Check API key."}), 500
+    # Semantic cache lookup
+    cached = db.get_cached_sql(question_with_context, schema)
+    if cached:
+        sql = cached["sql"]
+    else:
+        try:
+            sql = generate_sql(question_with_context, schema)
+        except Exception as e:
+            return jsonify({"error": f"LLM query failed: {str(e)}"}), 500
+        if not sql:
+            return jsonify({"error": "Could not generate SQL query. Check API key."}), 500
+        db.cache_qa_sql(question_with_context, sql, schema)
 
     if not _validate_sql(sql):
-        return jsonify({"error": "Generated query is not a valid SELECT statement"}), 500
+        return jsonify({"error": "Generated query is not a valid SELECT statement", "sql": sql}), 500
 
     sql = _ensure_user_filter(sql)
 
@@ -420,7 +461,21 @@ def api_ask():
         rows = result.fetchmany(50)
         rows_data = [dict(r._mapping) for r in rows]
     except Exception as e:
-        return jsonify({"error": f"Query execution failed: {str(e)}", "sql": sql}), 500
+        # Self-correction: try to fix the SQL using the actual error
+        corrected = correct_sql(sql, str(e), schema, question_with_context)
+        if corrected and _validate_sql(corrected):
+            corrected = _ensure_user_filter(corrected)
+            try:
+                conn2 = db.get_connection()
+                result = conn2.execute(db.text(corrected), {"uid": session["user_id"]})
+                columns = list(result.keys()) if result.returns_rows else []
+                rows = result.fetchmany(50)
+                rows_data = [dict(r._mapping) for r in rows]
+                sql = corrected  # use corrected SQL going forward
+            except Exception:
+                return jsonify({"error": f"Query execution failed: {str(e)}", "sql": sql, "corrected_sql": corrected}), 500
+        else:
+            return jsonify({"error": f"Query execution failed: {str(e)}", "sql": sql}), 500
 
     # Use programmatic answer for simple queries, LLM only for complex ones
     if _needs_llm_answer(question):
@@ -436,6 +491,52 @@ def api_ask():
         "data": rows_data[:50],
         "columns": columns,
     })
+
+
+# ── Dynamic Suggestions ──────────────────────────────────────
+
+@app.route("/api/suggestions", methods=["GET"])
+@login_required
+def api_suggestions():
+    uid = session["user_id"]
+    now = datetime.now(TIMEZONE)
+    suggestions = []
+
+    # 1. Top categories this month → "How much on {category}?"
+    cats = db.get_category_totals_by_month(now.year, now.month, uid)
+    for c in cats[:3]:
+        suggestions.append(f"How much on {c['category']}?")
+
+    # 2. Budget nearing limit → "Do I have budget left for {category}?"
+    budgets = db.get_budget_status(uid)
+    for b in sorted(budgets, key=lambda x: x["percentage"], reverse=True)[:2]:
+        if 50 <= b["percentage"] < 100:
+            label = "Overall" if b["category"] == "__overall__" else b["category"]
+            suggestions.append(f"Do I have budget left for {label}?")
+
+    # 3. Biggest expense this month
+    suggestions.append("What was my biggest expense this month?")
+
+    # 4. Week comparison
+    suggestions.append("How does this week compare to last week?")
+
+    # 5. Average daily spending
+    suggestions.append("What's my average daily spending this month?")
+
+    # 6. Category count this month
+    if len(cats) >= 3:
+        suggestions.append("Show me the breakdown by category")
+
+    # Shuffle, deduplicate, return 4
+    random.shuffle(suggestions)
+    seen = set()
+    unique = []
+    for s in suggestions:
+        if s not in seen:
+            seen.add(s)
+            unique.append(s)
+
+    return jsonify({"suggestions": unique[:4]})
 
 
 # ── Chat (unified expense + Q&A) ──────────────────────────
@@ -489,14 +590,23 @@ def api_chat():
     # Step 3: Fall through to Q&A
     schema = _get_schema_cached()
     current_date = datetime.now(TIMEZONE).strftime("%B %d, %Y")
-    question_with_context = f"Today is {current_date}.\n\nQuestion: {message}"
+    date_context = f"Today is {current_date}."
+    if expense_date:
+        date_context += f" The user is referring to date {expense_date}."
+    question_with_context = f"{date_context}\n\nQuestion: {message}"
 
-    try:
-        sql = generate_sql(question_with_context, schema)
-    except Exception as e:
-        return jsonify({"error": f"LLM query failed: {str(e)}"}), 500
-    if not sql:
-        return jsonify({"error": "Could not generate SQL query. Check API key."}), 500
+    # Semantic cache lookup
+    cached = db.get_cached_sql(question_with_context, schema)
+    if cached:
+        sql = cached["sql"]
+    else:
+        try:
+            sql = generate_sql(question_with_context, schema)
+        except Exception as e:
+            return jsonify({"error": f"LLM query failed: {str(e)}"}), 500
+        if not sql:
+            return jsonify({"error": "Could not generate SQL query. Check API key."}), 500
+        db.cache_qa_sql(question_with_context, sql, schema)
 
     if not _validate_sql(sql):
         return jsonify({"error": "Generated query is not a valid SELECT statement"}), 500
@@ -510,7 +620,21 @@ def api_chat():
         rows = result.fetchmany(50)
         rows_data = [dict(r._mapping) for r in rows]
     except Exception as e:
-        return jsonify({"error": f"Query execution failed: {str(e)}", "sql": sql}), 500
+        # Self-correction: try to fix the SQL using the actual error
+        corrected = correct_sql(sql, str(e), schema, question_with_context)
+        if corrected and _validate_sql(corrected):
+            corrected = _ensure_user_filter(corrected)
+            try:
+                conn2 = db.get_connection()
+                result = conn2.execute(db.text(corrected), {"uid": session["user_id"]})
+                columns = list(result.keys()) if result.returns_rows else []
+                rows = result.fetchmany(50)
+                rows_data = [dict(r._mapping) for r in rows]
+                sql = corrected
+            except Exception:
+                return jsonify({"error": f"Query execution failed: {str(e)}", "sql": sql, "corrected_sql": corrected}), 500
+        else:
+            return jsonify({"error": f"Query execution failed: {str(e)}", "sql": sql}), 500
 
     if _needs_llm_answer(message):
         answer = answer_from_results(message, sql, rows_data[:20], history=history)
