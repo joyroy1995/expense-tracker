@@ -301,6 +301,9 @@ SQL: SELECT category, COALESCE(SUM(amount), 0) as total, COUNT(*) as count FROM 
 Q: How much did I spend in the last 7 days?
 SQL: SELECT COALESCE(SUM(amount), 0) as total FROM expenses WHERE user_id = :uid AND date >= '{seven_days_ago}'
 
+Q: List last 7 days expenses descending by date
+SQL: SELECT date, description, amount, category FROM expenses WHERE user_id = :uid AND date >= '{seven_days_ago}' ORDER BY date DESC LIMIT 50
+
 Q: What was my most expensive expense this month?
 SQL: SELECT date, description, amount, category FROM expenses WHERE user_id = :uid AND date LIKE '{current_month}%' ORDER BY amount DESC LIMIT 1
 

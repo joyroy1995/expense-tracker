@@ -121,6 +121,25 @@ def _fix_category_in_sql(sql, question):
     return sql
 
 
+def _fix_sort_order(sql, question):
+    """Post-process SQL to add DESC when question asks for descending order."""
+    if not re.search(r'\b(?:descending|desc|newest\s*first|reverse)\b', question, re.IGNORECASE):
+        return sql
+    sql_upper = sql.upper()
+    idx = sql_upper.find('ORDER BY')
+    if idx == -1:
+        return sql
+    rest = sql_upper[idx + 9:]
+    if 'DESC' in rest:
+        return sql
+    insert_pos = len(sql)
+    for kw in ['LIMIT', 'OFFSET', 'HAVING']:
+        pos = rest.find(kw)
+        if pos != -1 and (idx + 9 + pos) < insert_pos:
+            insert_pos = idx + 9 + pos
+    return sql[:insert_pos] + ' DESC' + sql[insert_pos:]
+
+
 # ── API: Auth ──────────────────────────────────────────────
 
 @app.route("/api/me")
@@ -425,6 +444,7 @@ def _run_qa_pipeline(question, question_with_context, schema, history, uid, forc
 
     sql = _ensure_user_filter(sql)
     sql = _fix_category_in_sql(sql, question)
+    sql = _fix_sort_order(sql, question)
 
     try:
         conn = db.get_connection()
@@ -437,6 +457,7 @@ def _run_qa_pipeline(question, question_with_context, schema, history, uid, forc
         if corrected and _validate_sql(corrected):
             corrected = _ensure_user_filter(corrected)
             corrected = _fix_category_in_sql(corrected, question)
+            corrected = _fix_sort_order(corrected, question)
             try:
                 conn2 = db.get_connection()
                 result = conn2.execute(db.text(corrected), {"uid": uid})
