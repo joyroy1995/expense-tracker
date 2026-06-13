@@ -1031,7 +1031,10 @@ Semantics: budgets are recurring monthly limits. A budget resets each month.
            To compare spending vs budget in a given month, LEFT JOIN budgets → expenses
            on user_id AND category AND SUBSTR(expenses.date, 1, 7) = target_month.
            The special category '__overall__' in budgets represents the total spending
-           budget across all categories. Filter with b.category = '__overall__'.
+           budget across ALL categories. For '__overall__', do NOT join on e.category.
+           Instead, use a scalar subquery to sum ALL expenses for the month:
+           (SELECT COALESCE(SUM(amount), 0) FROM expenses WHERE user_id = :uid
+            AND date LIKE 'YYYY-MM%') as spent.
 """
 
 

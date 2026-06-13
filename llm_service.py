@@ -283,7 +283,7 @@ Rules:
 7. Use COALESCE for safe SUM/AVG aggregates.
 8. Limit results to 50 rows max unless the user asks for a specific number.
 9. Use single quotes for strings.
-10. For the budgets table: amounts are monthly budgets, one row per category. Compare actual spending vs budget using LEFT JOIN and GROUP BY.
+10. For the budgets table: amounts are monthly budgets, one row per category. Compare actual spending vs budget using LEFT JOIN and GROUP BY. Exception: for '__overall__' budget (total spending across ALL categories), use a scalar subquery instead of a JOIN on category.
 11. For description search, use LIKE with %% wildcards: description LIKE '%%keyword%%'
 12. When comparing periods, use SUBSTR(date, 1, 7) in GROUP BY or WHERE.
 
@@ -321,6 +321,9 @@ SQL: SELECT date, description, amount, category FROM expenses WHERE user_id = :u
 
 Q: How much budget is left for Groceries this month?
 SQL: SELECT b.category, b.amount as budget_amount, COALESCE(SUM(e.amount), 0) as spent, b.amount - COALESCE(SUM(e.amount), 0) as remaining FROM budgets b LEFT JOIN expenses e ON e.user_id = b.user_id AND e.category = b.category AND e.date LIKE '{current_month}%' WHERE b.user_id = :uid AND b.category = 'Groceries' GROUP BY b.id, b.category, b.amount
+
+Q: Do I have budget left for Overall?
+SQL: SELECT b.category, b.amount as budget_amount, (SELECT COALESCE(SUM(amount), 0) FROM expenses WHERE user_id = :uid AND date LIKE '{current_month}%') as spent, b.amount - (SELECT COALESCE(SUM(amount), 0) FROM expenses WHERE user_id = :uid AND date LIKE '{current_month}%') as remaining FROM budgets b WHERE b.user_id = :uid AND b.category = '__overall__'
 
 Q: What are the top 5 categories I spend the most on this year?
 SQL: SELECT category, COALESCE(SUM(amount), 0) as total FROM expenses WHERE user_id = :uid AND date LIKE '{current_year}%' GROUP BY category ORDER BY total DESC LIMIT 5
