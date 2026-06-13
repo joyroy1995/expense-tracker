@@ -208,6 +208,16 @@ def _fix_top_n_limit(sql, question):
     return sql
 
 
+def _fix_limit_syntax(sql, question):
+    """Convert MySQL-style LIMIT a,b to PostgreSQL-compatible LIMIT b OFFSET a."""
+    m = re.search(r'LIMIT\s+(\d+)\s*,\s*(\d+)', sql, re.IGNORECASE)
+    if not m:
+        return sql
+    offset = m.group(1)
+    limit = m.group(2)
+    return sql[:m.start()] + f'LIMIT {limit} OFFSET {offset}' + sql[m.end():]
+
+
 # ── API: Auth ──────────────────────────────────────────────
 
 @app.route("/api/me")
@@ -516,6 +526,7 @@ def _run_qa_pipeline(question, question_with_context, schema, history, uid, forc
     sql = _fix_sort_column(sql, question)
     sql = _fix_frequency_sql(sql, question)
     sql = _fix_top_n_limit(sql, question)
+    sql = _fix_limit_syntax(sql, question)
 
     try:
         conn = db.get_connection()
@@ -532,6 +543,7 @@ def _run_qa_pipeline(question, question_with_context, schema, history, uid, forc
             corrected = _fix_sort_column(corrected, question)
             corrected = _fix_frequency_sql(corrected, question)
             corrected = _fix_top_n_limit(corrected, question)
+            corrected = _fix_limit_syntax(corrected, question)
             try:
                 conn2 = db.get_connection()
                 result = conn2.execute(db.text(corrected), {"uid": uid})

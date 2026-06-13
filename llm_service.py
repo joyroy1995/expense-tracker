@@ -353,6 +353,9 @@ SQL: SELECT 'This week' as period, COALESCE(SUM(amount), 0) as total FROM expens
 Q: What was my largest expense last month?
 SQL: SELECT date, description, amount, category FROM expenses WHERE user_id = :uid AND date LIKE '{last_month}%' ORDER BY amount DESC LIMIT 1
 
+Q: What was my second most expensive expense this month?
+SQL: SELECT date, description, amount, category FROM expenses WHERE user_id = :uid AND date LIKE '{current_month}%' ORDER BY amount DESC LIMIT 1 OFFSET 1
+
 Q: {question}
 SQL:"""
 
