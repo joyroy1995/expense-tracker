@@ -285,6 +285,33 @@ def _fix_history_id_filter(sql, question):
     return sql
 
 
+def _fix_date_filter(sql, question):
+    """Fix date filter to use exact date when question mentions a specific date.
+    Replaces date LIKE 'YYYY-MM%'  with date = 'YYYY-MM-DD' when the
+    question contains a YYYY-MM-DD literal or 'on <date>' pattern."""
+    m = re.search(r'\b(\d{4})-(\d{2})-(\d{2})\b', question)
+    if not m:
+        return sql
+    exact_date = m.group(0)
+    month_pattern = exact_date[:7]  # YYYY-MM
+    # Replace date LIKE 'YYYY-MM%'  with date = 'YYYY-MM-DD'
+    sql = re.sub(
+        rf"date\s+LIKE\s*'{re.escape(month_pattern)}%'",
+        f"date = '{exact_date}'",
+        sql,
+        flags=re.IGNORECASE,
+    )
+    # Also fix date >= 'YYYY-MM-DD' AND date <= 'YYYY-MM-DD' ranges
+    # where both bounds are the same date (should be date = 'YYYY-MM-DD')
+    sql = re.sub(
+        rf"date\s*>=\s*'{exact_date}'\s+AND\s+date\s*<=\s*'{exact_date}'",
+        f"date = '{exact_date}'",
+        sql,
+        flags=re.IGNORECASE,
+    )
+    return sql
+
+
 # ── API: Auth ──────────────────────────────────────────────
 
 @app.route("/api/me")
@@ -596,6 +623,7 @@ def _run_qa_pipeline(question, question_with_context, schema, history, uid, forc
     sql = _fix_limit_syntax(sql, question)
     sql = _fix_ordinal_limit(sql, question)
     sql = _fix_history_id_filter(sql, question)
+    sql = _fix_date_filter(sql, question)
 
     try:
         conn = db.get_connection()
@@ -615,6 +643,7 @@ def _run_qa_pipeline(question, question_with_context, schema, history, uid, forc
             corrected = _fix_limit_syntax(corrected, question)
             corrected = _fix_ordinal_limit(corrected, question)
             corrected = _fix_history_id_filter(corrected, question)
+            corrected = _fix_date_filter(corrected, question)
             try:
                 conn2 = db.get_connection()
                 result = conn2.execute(db.text(corrected), {"uid": uid})
