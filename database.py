@@ -974,14 +974,22 @@ def get_budget_status(user_id, month=None):
 
 # ── NL Q&A Schema ────────────────────────────────────────────
 
+_ALL_CATEGORIES = {
+    "Food", "Transport", "Shopping", "Bills", "Entertainment", "Health",
+    "Education", "Rent", "Dining Out", "Fruits", "Groceries", "Travel",
+    "Personal Care", "Gifts", "Investment", "Savings", "Other",
+}
+
+
 def get_schema():
     """Return a human-readable DB schema string for the LLM."""
     conn = get_connection()
-    cats = conn.execute(
+    db_cats = conn.execute(
         text("SELECT DISTINCT category FROM expenses ORDER BY category")
     ).fetchall()
-    categories = [r[0] for r in cats]
-    cats_str = ", ".join(categories) if categories else "Groceries, Transport, Dining Out, etc."
+    db_cat_set = {r[0] for r in db_cats}
+    all_cats = sorted(db_cat_set | _ALL_CATEGORIES)
+    cats_str = ", ".join(all_cats)
     budget_cats = conn.execute(
         text("SELECT DISTINCT category FROM budgets ORDER BY category")
     ).fetchall()
