@@ -545,7 +545,7 @@ def _run_qa_pipeline(question, question_with_context, schema, history, uid, forc
         sql = cached["sql"]
     else:
         try:
-            sql = generate_sql(question_with_context, schema)
+            sql = generate_sql(question_with_context, schema, history=history)
         except Exception as e:
             return {"error": f"LLM query failed: {str(e)}"}
         if not sql:
@@ -571,7 +571,7 @@ def _run_qa_pipeline(question, question_with_context, schema, history, uid, forc
         rows = result.fetchmany(50)
         rows_data = [dict(r._mapping) for r in rows]
     except Exception as e:
-        corrected = correct_sql(sql, str(e), schema, question_with_context)
+        corrected = correct_sql(sql, str(e), schema, question_with_context, history=history)
         if corrected and _validate_sql(corrected):
             corrected = _ensure_user_filter(corrected)
             corrected = _fix_category_in_sql(corrected, question)
@@ -663,7 +663,7 @@ def api_ask():
     question_with_context = f"{date_context}\n\nQuestion: {question}"
 
     # Try decomposition
-    sub_questions = decompose_question(question_with_context, schema)
+    sub_questions = decompose_question(question_with_context, schema, history=history)
 
     if sub_questions:
         sub_results = []
@@ -863,7 +863,7 @@ def api_chat():
     question_with_context = f"{date_context}\n\nQuestion: {message}"
 
     # Try decomposition
-    sub_questions = decompose_question(question_with_context, schema)
+    sub_questions = decompose_question(question_with_context, schema, history=history)
 
     if sub_questions:
         sub_results = []

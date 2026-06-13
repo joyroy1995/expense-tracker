@@ -240,11 +240,11 @@ def predict_expense(description, learned_categories=None):
 
 # ── NL Q&A ──────────────────────────────────────────────────
 
-def _fmt_history(history):
+def _fmt_history(history, max_entries=6):
     if not history:
         return ""
     lines = ["\n---\nConversation history:"]
-    for h in history[-6:]:
+    for h in history[-max_entries:]:
         role = "User" if h["role"] == "user" else "Assistant"
         lines.append(f"{role}: {h['content']}")
     lines.append("---")
@@ -356,6 +356,7 @@ SQL: SELECT date, description, amount, category FROM expenses WHERE user_id = :u
 Q: What was my second most expensive expense this month?
 SQL: SELECT date, description, amount, category FROM expenses WHERE user_id = :uid AND date LIKE '{current_month}%' ORDER BY amount DESC LIMIT 1 OFFSET 1
 
+{history}
 Q: {question}
 SQL:"""
 
@@ -381,16 +382,17 @@ Rules:
 Answer:"""
 
 
-def generate_sql(question, schema, retries=1):
+def generate_sql(question, schema, history=None, retries=1):
     if not _has_api_key():
         return None
     today, current_month, last_month, current_year, seven_days_ago, week_start, last_week_start, days_elapsed, days_in_month = _fmt_dates()
+    hist_text = _fmt_history(history, max_entries=3)
     prompt = SQL_PROMPT.format(
         today=today, current_month=current_month, last_month=last_month,
         current_year=current_year, seven_days_ago=seven_days_ago,
         week_start=week_start, last_week_start=last_week_start,
         days_elapsed=days_elapsed, days_in_month=days_in_month,
-        schema=schema, question=question,
+        schema=schema, question=question, history=hist_text,
     )
     last_error = None
     for attempt in range(retries + 1):
@@ -430,7 +432,7 @@ Original SQL: {sql}
 Error: {error}
 Database schema:
 {schema}
-Original question: {question}
+Original question: {question}{history}
 
 Rules:
 - Return only the corrected SQL query
@@ -441,11 +443,11 @@ Rules:
 Corrected SQL:"""
 
 
-def correct_sql(sql, error, schema, question):
-    """Attempt to fix a failed SQL query using the actual database error."""
+def correct_sql(sql, error, schema, question, history=None):
     if not _has_api_key():
         return None
-    prompt = CORRECT_SQL_PROMPT.format(sql=sql, error=error, schema=schema, question=question)
+    hist_text = _fmt_history(history, max_entries=3)
+    prompt = CORRECT_SQL_PROMPT.format(sql=sql, error=error, schema=schema, question=question, history=hist_text)
     try:
         client = _get_client()
         response = client.chat.completions.create(
@@ -1041,18 +1043,20 @@ Q: What's my total spending this month and how many transactions did I make?
 Q: How much on Transport this month?
 {{"simple": true}}
 
+{history}
 Question: {question}
 Return ONLY valid JSON:"""
 
 
-def decompose_question(question, schema):
+def decompose_question(question, schema, history=None):
     """Break a compound question into simpler sub-questions. Returns None if simple."""
     if not _has_api_key():
         return None
     if not _is_compound_question(question):
         return None
 
-    prompt = DECOMPOSE_PROMPT.format(question=question)
+    hist_text = _fmt_history(history, max_entries=3)
+    prompt = DECOMPOSE_PROMPT.format(question=question, history=hist_text)
     try:
         client = _get_client()
         response = client.chat.completions.create(
