@@ -1679,7 +1679,7 @@ function stopVoiceInput() {
 function getWelcomeHtml() {
   let chips = '';
   const pool = cachedSuggestions.length ? cachedSuggestions : FALLBACK_SUGGESTIONS;
-  const count = window.innerWidth < 768 ? 1 : 3;
+  const count = window.innerWidth < 768 ? 2 : 3;
   const picks = pool.sort(() => Math.random() - 0.5).slice(0, count);
   if (picks.length) {
     chips = `<div class="chat-suggestion-chips">`;
