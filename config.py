@@ -1,6 +1,18 @@
 import os
 from zoneinfo import ZoneInfo
 
+# ── Load .env file ──
+_env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+if os.path.isfile(_env_path):
+    with open(_env_path) as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, _, val = line.partition("=")
+            key, val = key.strip(), val.strip().strip("'\"")
+            os.environ.setdefault(key, val)
+
 SECRET_KEY = os.environ.get("SECRET_KEY", "change-this-to-a-random-secret-key")
 TIMEZONE = ZoneInfo("Asia/Dhaka")
 

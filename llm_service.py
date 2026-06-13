@@ -1,9 +1,8 @@
 import google.generativeai as genai
 import json
 import re
-from config import GEMINI_API_KEY, SEED_CATEGORIES
-
-genai.configure(api_key=GEMINI_API_KEY)
+import os
+from config import SEED_CATEGORIES
 
 CATEGORIES = [
     "Food",
@@ -97,10 +96,18 @@ Examples:
 - "bari bhara 15000" -> {{"category": "Rent", "amount": 15000}}
 """
 
-model = genai.GenerativeModel(
-    model_name="gemini-2.0-flash",
-    system_instruction=SYSTEM_PROMPT,
-)
+def _get_model(system_instruction=None):
+    key = os.environ.get("GEMINI_API_KEY", "")
+    if key:
+        genai.configure(api_key=key)
+    return genai.GenerativeModel(
+        model_name="gemini-2.0-flash-lite",
+        system_instruction=system_instruction or SYSTEM_PROMPT,
+    )
+
+
+def _has_api_key():
+    return bool(os.environ.get("GEMINI_API_KEY", ""))
 
 
 def bengali_to_english_num(text):
@@ -170,11 +177,12 @@ def extract_expense(description, learned_categories=None):
         amount = extract_amount_fallback(description) or 0
         return {"category": learned_cat, "amount": amount}
 
-    if not GEMINI_API_KEY:
+    if not _has_api_key():
         return {"category": keyword_category(description), "amount": extract_amount_fallback(description) or 0}
 
     try:
-        response = model.generate_content(description)
+        m = _get_model()
+        response = m.generate_content(description)
         text = response.text.strip().strip("```").strip()
 
         if text.startswith("json"):
@@ -203,6 +211,69 @@ def extract_expense(description, learned_categories=None):
         amount = extract_amount_fallback(description)
         category = keyword_category(description)
         return {"category": category, "amount": amount or 0}
+
+
+MONTH_NAMES = [
+    "January", "February", "March", "April", "May", "June",
+    "July", "August", "September", "October", "November", "December",
+]
+
+
+def generate_monthly_summary(year, month, total, prev_total, categories, prev_categories):
+    if not _has_api_key():
+        return None
+
+    month_name = MONTH_NAMES[month - 1]
+    prev_month = month - 1 or 12
+    prev_year = year if month > 1 else year - 1
+    prev_month_name = MONTH_NAMES[prev_month - 1]
+
+    cat_lines = "\n".join(
+        f"- {c['category']}: ৳{c['total']:.0f} ({c['count']} transactions)"
+        for c in categories
+    ) if categories else "No expenses recorded."
+
+    prev_cat_lines = "\n".join(
+        f"- {c['category']}: ৳{c['total']:.0f} ({c['count']} transactions)"
+        for c in prev_categories
+    ) if prev_categories else "No expenses recorded."
+
+    pct_change = ((total - prev_total) / prev_total * 100) if prev_total else 0
+    direction = "increase" if pct_change > 0 else "decrease" if pct_change < 0 else "no change"
+
+    prompt = f"""You are a friendly Bangladeshi personal finance assistant.
+
+Generate a concise 3-4 paragraph monthly spending summary in English based on the data below. Keep it casual and helpful. Focus on insights, not just numbers.
+
+Current month: {month_name} {year}
+Total spent: ৳{total:.0f}
+
+Category breakdown:
+{cat_lines}
+
+Previous month: {prev_month_name} {prev_year}
+Previous total: ৳{prev_total:.0f}
+Category breakdown:
+{prev_cat_lines}
+
+Overall: Spending went from ৳{prev_total:.0f} to ৳{total:.0f} ({direction} of {abs(pct_change):.0f}%).
+
+Cover these points:
+1. Total spending and how it changed compared to last month
+2. Top spending categories and notable changes
+3. One practical, personalized saving tip based on their actual spending habits
+
+Write in a warm, conversational tone. Do not use bullet points - write in paragraphs."""
+
+    try:
+        summary_model = _get_model(system_instruction="You are a friendly Bangladeshi personal finance assistant.")
+        response = summary_model.generate_content(prompt)
+        return response.text.strip()
+    except Exception as e:
+        err = str(e)
+        if "quota" in err.lower() or "429" in err:
+            return f"API quota exceeded. Please try again later or upgrade your Gemini plan."
+        return None
 
 
 def predict_expense(description, learned_categories=None):

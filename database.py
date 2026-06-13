@@ -112,6 +112,21 @@ def _init_schema(conn):
             )
         """)
         )
+        conn.execute(
+            text("""
+            CREATE TABLE IF NOT EXISTS monthly_summaries (
+                id SERIAL PRIMARY KEY,
+                user_id INTEGER REFERENCES users(id),
+                year INTEGER NOT NULL,
+                month INTEGER NOT NULL,
+                summary_text TEXT NOT NULL,
+                total REAL DEFAULT 0,
+                prev_total REAL DEFAULT 0,
+                generated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(user_id, year, month)
+            )
+        """)
+        )
     else:
         conn.execute(
             text("""
@@ -178,6 +193,22 @@ def _init_schema(conn):
                 category TEXT NOT NULL,
                 learned_at TEXT DEFAULT CURRENT_TIMESTAMP,
                 UNIQUE(user_id, keyword),
+                FOREIGN KEY (user_id) REFERENCES users(id)
+            )
+        """)
+        )
+        conn.execute(
+            text("""
+            CREATE TABLE IF NOT EXISTS monthly_summaries (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER,
+                year INTEGER NOT NULL,
+                month INTEGER NOT NULL,
+                summary_text TEXT NOT NULL,
+                total REAL DEFAULT 0,
+                prev_total REAL DEFAULT 0,
+                generated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(user_id, year, month),
                 FOREIGN KEY (user_id) REFERENCES users(id)
             )
         """)
@@ -773,3 +804,59 @@ def get_learned_categories(user_id):
         {"uid": user_id},
     ).fetchall()
     return {row[0]: row[1] for row in rows}
+
+
+# ── Monthly summaries ─────────────────────────────────────────
+
+def get_summary(user_id, year, month):
+    conn = get_connection()
+    row = conn.execute(
+        text("""
+            SELECT summary_text, total, prev_total, generated_at
+            FROM monthly_summaries
+            WHERE user_id = :uid AND year = :y AND month = :m
+        """),
+        {"uid": user_id, "y": year, "m": month},
+    ).fetchone()
+    return dict(row._mapping) if row else None
+
+
+def save_summary(user_id, year, month, summary_text, total, prev_total):
+    conn = get_connection()
+    now = datetime.now(TIMEZONE).strftime("%Y-%m-%d %H:%M:%S")
+    conn.execute(
+        text("""
+            INSERT INTO monthly_summaries (user_id, year, month, summary_text, total, prev_total, generated_at)
+            VALUES (:uid, :y, :m, :s, :t, :pt, :now)
+            ON CONFLICT(user_id, year, month) DO UPDATE SET
+                summary_text = :s2, total = :t2, prev_total = :pt2, generated_at = :now2
+        """),
+        {"uid": user_id, "y": year, "m": month, "s": summary_text,
+         "t": total, "pt": prev_total, "now": now,
+         "s2": summary_text, "t2": total, "pt2": prev_total, "now2": now},
+    )
+    conn.commit()
+
+
+def get_category_totals_raw(year, month, user_id=None):
+    conn = get_connection()
+    month_pattern = f"{year}-{month:02d}%"
+    uf = _user_filter(user_id)
+    params = {"pattern": month_pattern}
+    params.update(_user_params(user_id))
+    rows = conn.execute(
+        text(f"""
+            SELECT category, SUM(amount) as total, COUNT(*) as count
+            FROM expenses
+            WHERE date LIKE :pattern{uf}
+            GROUP BY category
+            ORDER BY total DESC
+        """),
+        params,
+    ).fetchall()
+    return [dict(r._mapping) for r in rows]
+
+
+def get_month_total_raw(year, month, user_id=None):
+    totals = get_category_totals_raw(year, month, user_id)
+    return sum(t["total"] for t in totals)

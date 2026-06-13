@@ -50,6 +50,7 @@ function getRoute() {
     '/forgot-password': 'forgot-password',
     '/': 'home',
     '/dashboard': 'dashboard',
+    '/summary': 'summary',
     '/profile': 'profile',
     '/admin/users': 'admin-users',
   };
@@ -872,6 +873,106 @@ function initCharts(categoryTotals, monthlyTotals, colors) {
   }
 }
 
+// ── Summary ──
+async function renderSummary(params) {
+  setLayout('app');
+  document.title = 'Monthly Summary - Expense Tracker';
+  const app = document.getElementById('app');
+  const now = new Date();
+  const year = parseInt(params.year) || now.getFullYear();
+  const month = parseInt(params.month) || now.getMonth() + 1;
+  const monthNames = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+
+  app.innerHTML = `
+    <div class="dashboard-header">
+      <h1>Monthly Summary</h1>
+      <div class="date-selector">
+        <select id="summaryYear" onchange="changeSummaryPeriod()">
+          ${Array.from({length:5},(_,i)=>now.getFullYear()-2+i).map(y =>
+            `<option value="${y}" ${y===year?'selected':''}>${y}</option>`
+          ).join('')}
+        </select>
+        <select id="summaryMonth" onchange="changeSummaryPeriod()">
+          ${monthNames.map((m,i)=>`<option value="${i+1}" ${i+1===month?'selected':''}>${m}</option>`).join('')}
+        </select>
+      </div>
+    </div>
+    <div class="summary-loading"><div class="spinner-lg"></div><p>Generating your summary...</p></div>`;
+
+  const res = await api.get(`/api/summary?year=${year}&month=${month}`);
+  if (!res.ok) { handleAuthError(res); return; }
+  const d = res.data;
+
+  if (d.total === 0 && d.prev_total === 0) {
+    app.innerHTML = `
+      <div class="dashboard-header">
+        <h1>Monthly Summary</h1>
+        <div class="date-selector">...</div>
+      </div>
+      <div class="card summary-card">
+        <div class="summary-empty">No expenses found for ${monthNames[month-1]} ${year}. Add some expenses first!</div>
+      </div>`;
+    return;
+  }
+
+  const pct = d.prev_total > 0 ? ((d.total - d.prev_total) / d.prev_total * 100).toFixed(0) : 0;
+  const direction = pct > 0 ? 'up' : pct < 0 ? 'down' : '';
+
+  app.innerHTML = `
+    <div class="dashboard-header">
+      <h1>Monthly Summary</h1>
+      <div class="date-selector">
+        <select id="summaryYear" onchange="changeSummaryPeriod()">
+          ${Array.from({length:5},(_,i)=>now.getFullYear()-2+i).map(y =>
+            `<option value="${y}" ${y===year?'selected':''}>${y}</option>`
+          ).join('')}
+        </select>
+        <select id="summaryMonth" onchange="changeSummaryPeriod()">
+          ${monthNames.map((m,i)=>`<option value="${i+1}" ${i+1===month?'selected':''}>${m}</option>`).join('')}
+        </select>
+        <button class="btn btn-outline btn-sm" onclick="refreshSummary()" title="Regenerate">↻</button>
+      </div>
+    </div>
+
+    <div class="summary-totals">
+      <div class="stat-card">
+        <div class="stat-label">${monthNames[month-1]} ${year}</div>
+        <div class="stat-value">৳${Number(d.total).toFixed(2)}</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">vs ${monthNames[month > 1 ? month-2 : 11]} ${month > 1 ? year : year-1}</div>
+        <div class="stat-value ${direction === 'up' ? 'text-red' : direction === 'down' ? 'text-green' : ''}">
+          ${direction ? (direction === 'up' ? '↑' : '↓') + ' ' + Math.abs(pct) + '%' : '—'}
+        </div>
+      </div>
+    </div>
+
+    <div class="card summary-card">
+      ${d.summary
+        ? `<div class="summary-text">${esc(d.summary).replace(/\n/g, '<br>')}</div>`
+        : `<div class="summary-empty">AI summary unavailable. Check your GEMINI_API_KEY or try again later.</div>`}
+      ${d.cached ? '<div class="summary-meta">Cached — <a href="#" onclick="refreshSummary();return false;">Regenerate</a></div>' : ''}
+    </div>`;
+}
+
+function changeSummaryPeriod() {
+  const y = document.getElementById('summaryYear')?.value;
+  const m = document.getElementById('summaryMonth')?.value;
+  if (y && m) navigate(`/summary?year=${y}&month=${m}`);
+}
+
+async function refreshSummary() {
+  const y = document.getElementById('summaryYear')?.value;
+  const m = document.getElementById('summaryMonth')?.value;
+  if (!y || !m) return;
+  const app = document.getElementById('app');
+  app.innerHTML = '<div class="summary-loading"><div class="spinner-lg"></div><p>Regenerating your summary...</p></div>';
+  const res = await api.get(`/api/summary?year=${y}&month=${m}&refresh=1`);
+  if (!res.ok) { handleAuthError(res); return; }
+  navigate(`/summary?year=${y}&month=${m}`);
+}
+
+
 // ── Profile ──
 async function renderProfile() {
   setLayout('app');
@@ -1075,6 +1176,7 @@ async function renderRoute() {
     case 'reset-password': renderResetPassword(token); break;
     case 'home': renderHome(parseInt(params?.page) || 1); break;
     case 'dashboard': renderDashboard(params || {}); break;
+    case 'summary': renderSummary(params || {}); break;
     case 'profile': renderProfile(); break;
     case 'admin-users': renderAdminUsers(); break;
     default: renderHome(1);

@@ -3,7 +3,7 @@ from functools import wraps
 from datetime import datetime
 from werkzeug.security import generate_password_hash, check_password_hash
 import database as db
-from llm_service import extract_expense, predict_expense, extract_keywords
+from llm_service import extract_expense, predict_expense, extract_keywords, generate_monthly_summary
 from config import USERNAME, PASSWORD, SECRET_KEY, CATEGORY_COLORS, TIMEZONE, SEED_CATEGORIES
 
 app = Flask(__name__)
@@ -262,6 +262,66 @@ def api_dashboard():
         "users_list": users_list,
         "category_colors": CATEGORY_COLORS,
         "role": session.get("role"),
+    })
+
+
+# ── API: Summary ────────────────────────────────────────────
+
+@app.route("/api/summary")
+@login_required
+def api_summary():
+    uid = session["user_id"]
+    now = datetime.now(TIMEZONE)
+    year = request.args.get("year", now.year, type=int)
+    month = request.args.get("month", now.month, type=int)
+
+    refresh = request.args.get("refresh", 0, type=int)
+    cached = None if refresh else db.get_summary(uid, year, month)
+    if cached:
+        return jsonify({
+            "summary": cached["summary_text"],
+            "year": year,
+            "month": month,
+            "total": cached["total"],
+            "prev_total": cached["prev_total"],
+            "generated_at": cached["generated_at"],
+            "cached": True,
+        })
+
+    categories = db.get_category_totals_raw(year, month, user_id=uid)
+    total = sum(c["total"] for c in categories)
+
+    prev_month = month - 1 or 12
+    prev_year = year if month > 1 else year - 1
+    prev_categories = db.get_category_totals_raw(prev_year, prev_month, user_id=uid)
+    prev_total = sum(c["total"] for c in prev_categories)
+
+    if total == 0 and prev_total == 0:
+        return jsonify({
+            "summary": None,
+            "year": year,
+            "month": month,
+            "total": 0,
+            "prev_total": 0,
+            "cached": False,
+        })
+
+    summary_text = generate_monthly_summary(
+        year, month, total, prev_total, categories, prev_categories
+    )
+
+    if summary_text:
+        db.save_summary(uid, year, month, summary_text, total, prev_total)
+    else:
+        summary_text = "AI summary unavailable. Check your GEMINI_API_KEY or try again later."
+
+    return jsonify({
+        "summary": summary_text,
+        "year": year,
+        "month": month,
+        "total": total,
+        "prev_total": prev_total,
+        "cached": False,
     })
 
 
