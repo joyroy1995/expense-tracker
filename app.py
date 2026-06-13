@@ -5,7 +5,7 @@ from werkzeug.security import generate_password_hash, check_password_hash
 import re
 import random
 import database as db
-from llm_service import extract_expense, predict_expense, extract_keywords, generate_sql, correct_sql, answer_from_results, format_answer, split_expenses, _clean_split_desc, extract_date_reference, clean_date_refs, detect_budget_intent, is_question, transcribe_audio
+from llm_service import extract_expense, predict_expense, extract_keywords, generate_sql, correct_sql, answer_from_results, format_answer, split_expenses, _clean_split_desc, extract_date_reference, clean_date_refs, detect_budget_intent, is_question, transcribe_audio, decompose_question, compose_answers
 from config import USERNAME, PASSWORD, SECRET_KEY, CATEGORY_COLORS, TIMEZONE, SEED_CATEGORIES
 
 app = Flask(__name__)
@@ -377,6 +377,60 @@ def api_learn():
     return jsonify({"success": True})
 
 
+# ── Shared Q&A Pipeline ──────────────────────────────────
+
+def _run_qa_pipeline(question, question_with_context, schema, history, uid, force_programmatic=False):
+    """Run a single question through SQL pipeline: cache→generate→validate→execute→format.
+    Returns dict with answer/sql/data/columns, or dict with error key."""
+    cached = db.get_cached_sql(question_with_context, schema)
+    if cached:
+        sql = cached["sql"]
+    else:
+        try:
+            sql = generate_sql(question_with_context, schema)
+        except Exception as e:
+            return {"error": f"LLM query failed: {str(e)}"}
+        if not sql:
+            return {"error": "Could not generate SQL query. Check API key."}
+        db.cache_qa_sql(question_with_context, sql, schema)
+
+    if not _validate_sql(sql):
+        return {"error": "Generated query is not a valid SELECT statement", "sql": sql}
+
+    sql = _ensure_user_filter(sql)
+
+    try:
+        conn = db.get_connection()
+        result = conn.execute(db.text(sql), {"uid": uid})
+        columns = list(result.keys()) if result.returns_rows else []
+        rows = result.fetchmany(50)
+        rows_data = [dict(r._mapping) for r in rows]
+    except Exception as e:
+        corrected = correct_sql(sql, str(e), schema, question_with_context)
+        if corrected and _validate_sql(corrected):
+            corrected = _ensure_user_filter(corrected)
+            try:
+                conn2 = db.get_connection()
+                result = conn2.execute(db.text(corrected), {"uid": uid})
+                columns = list(result.keys()) if result.returns_rows else []
+                rows = result.fetchmany(50)
+                rows_data = [dict(r._mapping) for r in rows]
+                sql = corrected
+            except Exception:
+                return {"error": f"Query execution failed: {str(e)}", "sql": sql, "corrected_sql": corrected}
+        else:
+            return {"error": f"Query execution failed: {str(e)}", "sql": sql}
+
+    if _needs_llm_answer(question) and not force_programmatic:
+        answer = answer_from_results(question, sql, rows_data[:20], history=history)
+        if not answer:
+            answer = format_answer(columns, rows_data, question)
+    else:
+        answer = format_answer(columns, rows_data, question)
+
+    return {"answer": answer, "sql": sql, "data": rows_data[:50], "columns": columns}
+
+
 # ── NL Q&A schema cache ──────────────────────────────────
 _schema_cache = None
 _schema_cache_time = 0
@@ -436,61 +490,47 @@ def api_ask():
         date_context += f" The user is referring to date {expense_date}."
     question_with_context = f"{date_context}\n\nQuestion: {question}"
 
-    # Semantic cache lookup
-    cached = db.get_cached_sql(question_with_context, schema)
-    if cached:
-        sql = cached["sql"]
-    else:
-        try:
-            sql = generate_sql(question_with_context, schema)
-        except Exception as e:
-            return jsonify({"error": f"LLM query failed: {str(e)}"}), 500
-        if not sql:
-            return jsonify({"error": "Could not generate SQL query. Check API key."}), 500
-        db.cache_qa_sql(question_with_context, sql, schema)
+    # Try decomposition
+    sub_questions = decompose_question(question_with_context, schema)
 
-    if not _validate_sql(sql):
-        return jsonify({"error": "Generated query is not a valid SELECT statement", "sql": sql}), 500
+    if sub_questions:
+        sub_results = []
+        for sq in sub_questions:
+            sq_with_context = f"{date_context}\n\nQuestion: {sq}"
+            result = _run_qa_pipeline(sq, sq_with_context, schema, history, session["user_id"], force_programmatic=True)
+            if "error" not in result:
+                result["sub_question"] = sq
+                sub_results.append(result)
 
-    sql = _ensure_user_filter(sql)
+        if not sub_results:
+            return jsonify({"error": "Could not answer this question"}), 500
 
-    try:
-        conn = db.get_connection()
-        result = conn.execute(db.text(sql), {"uid": session["user_id"]})
-        columns = list(result.keys()) if result.returns_rows else []
-        rows = result.fetchmany(50)
-        rows_data = [dict(r._mapping) for r in rows]
-    except Exception as e:
-        # Self-correction: try to fix the SQL using the actual error
-        corrected = correct_sql(sql, str(e), schema, question_with_context)
-        if corrected and _validate_sql(corrected):
-            corrected = _ensure_user_filter(corrected)
-            try:
-                conn2 = db.get_connection()
-                result = conn2.execute(db.text(corrected), {"uid": session["user_id"]})
-                columns = list(result.keys()) if result.returns_rows else []
-                rows = result.fetchmany(50)
-                rows_data = [dict(r._mapping) for r in rows]
-                sql = corrected  # use corrected SQL going forward
-            except Exception:
-                return jsonify({"error": f"Query execution failed: {str(e)}", "sql": sql, "corrected_sql": corrected}), 500
-        else:
-            return jsonify({"error": f"Query execution failed: {str(e)}", "sql": sql}), 500
-
-    # Use programmatic answer for simple queries, LLM only for complex ones
-    if _needs_llm_answer(question):
-        answer = answer_from_results(question, sql, rows_data[:20], history=history)
+        answer = compose_answers(question, sub_results, history=history)
         if not answer:
-            answer = format_answer(columns, rows_data, question)
-    else:
-        answer = format_answer(columns, rows_data, question)
+            answer = " ".join(r["answer"] for r in sub_results if r.get("answer"))
 
-    return jsonify({
-        "answer": answer,
-        "sql": sql,
-        "data": rows_data[:50],
-        "columns": columns,
-    })
+        all_sql = "; ".join(r["sql"] for r in sub_results if r.get("sql"))
+        all_data = []
+        seen = set()
+        for r in sub_results:
+            for row in r.get("data", []):
+                k = tuple(sorted(row.items()))
+                if k not in seen:
+                    seen.add(k)
+                    all_data.append(row)
+
+        return jsonify({
+            "answer": answer,
+            "sql": all_sql,
+            "data": all_data[:50],
+            "columns": sub_results[0].get("columns", []) if sub_results else [],
+            "decomposed": True,
+        })
+
+    result = _run_qa_pipeline(question, question_with_context, schema, history, session["user_id"])
+    if "error" in result:
+        return jsonify(result), 500
+    return jsonify(result)
 
 
 # ── Dynamic Suggestions ──────────────────────────────────────
@@ -595,61 +635,48 @@ def api_chat():
         date_context += f" The user is referring to date {expense_date}."
     question_with_context = f"{date_context}\n\nQuestion: {message}"
 
-    # Semantic cache lookup
-    cached = db.get_cached_sql(question_with_context, schema)
-    if cached:
-        sql = cached["sql"]
-    else:
-        try:
-            sql = generate_sql(question_with_context, schema)
-        except Exception as e:
-            return jsonify({"error": f"LLM query failed: {str(e)}"}), 500
-        if not sql:
-            return jsonify({"error": "Could not generate SQL query. Check API key."}), 500
-        db.cache_qa_sql(question_with_context, sql, schema)
+    # Try decomposition
+    sub_questions = decompose_question(question_with_context, schema)
 
-    if not _validate_sql(sql):
-        return jsonify({"error": "Generated query is not a valid SELECT statement"}), 500
+    if sub_questions:
+        sub_results = []
+        for sq in sub_questions:
+            sq_with_context = f"{date_context}\n\nQuestion: {sq}"
+            result = _run_qa_pipeline(sq, sq_with_context, schema, history, session["user_id"], force_programmatic=True)
+            if "error" not in result:
+                result["sub_question"] = sq
+                sub_results.append(result)
 
-    sql = _ensure_user_filter(sql)
+        if not sub_results:
+            return jsonify({"error": "Could not answer this question"}), 500
 
-    try:
-        conn = db.get_connection()
-        result = conn.execute(db.text(sql), {"uid": session["user_id"]})
-        columns = list(result.keys()) if result.returns_rows else []
-        rows = result.fetchmany(50)
-        rows_data = [dict(r._mapping) for r in rows]
-    except Exception as e:
-        # Self-correction: try to fix the SQL using the actual error
-        corrected = correct_sql(sql, str(e), schema, question_with_context)
-        if corrected and _validate_sql(corrected):
-            corrected = _ensure_user_filter(corrected)
-            try:
-                conn2 = db.get_connection()
-                result = conn2.execute(db.text(corrected), {"uid": session["user_id"]})
-                columns = list(result.keys()) if result.returns_rows else []
-                rows = result.fetchmany(50)
-                rows_data = [dict(r._mapping) for r in rows]
-                sql = corrected
-            except Exception:
-                return jsonify({"error": f"Query execution failed: {str(e)}", "sql": sql, "corrected_sql": corrected}), 500
-        else:
-            return jsonify({"error": f"Query execution failed: {str(e)}", "sql": sql}), 500
-
-    if _needs_llm_answer(message):
-        answer = answer_from_results(message, sql, rows_data[:20], history=history)
+        answer = compose_answers(message, sub_results, history=history)
         if not answer:
-            answer = format_answer(columns, rows_data, message)
-    else:
-        answer = format_answer(columns, rows_data, message)
+            answer = " ".join(r["answer"] for r in sub_results if r.get("answer"))
 
-    return jsonify({
-        "type": "question",
-        "answer": answer,
-        "sql": sql,
-        "data": rows_data[:50],
-        "columns": columns,
-    })
+        all_sql = "; ".join(r["sql"] for r in sub_results if r.get("sql"))
+        all_data = []
+        seen = set()
+        for r in sub_results:
+            for row in r.get("data", []):
+                k = tuple(sorted(row.items()))
+                if k not in seen:
+                    seen.add(k)
+                    all_data.append(row)
+
+        return jsonify({
+            "type": "question",
+            "answer": answer,
+            "sql": all_sql,
+            "data": all_data[:50],
+            "columns": sub_results[0].get("columns", []) if sub_results else [],
+            "decomposed": True,
+        })
+
+    result = _run_qa_pipeline(message, question_with_context, schema, history, session["user_id"])
+    if "error" in result:
+        return jsonify(result), 500
+    return jsonify({"type": "question", **result})
 
 
 # ── Expense Splitting ──────────────────────────────────────

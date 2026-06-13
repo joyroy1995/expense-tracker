@@ -932,6 +932,140 @@ def detect_budget_intent(text):
     return None
 
 
+# ── Query Decomposition ──────────────────────────────────────
+
+_COMPOUND_INDICATORS = [
+    " and what ", " and how ", " and which ", " and who ",
+    " and when ", " and where ", " and show ", " and tell ",
+    " and list ", " and give ",
+    " then ", " also ",
+    "after that", "before that",
+    "most expensive category ",
+    "biggest expense ",
+]
+
+def _is_compound_question(question):
+    q = question.lower().strip()
+    return any(indicator in q for indicator in _COMPOUND_INDICATORS)
+
+
+DECOMPOSE_PROMPT = """You are a query decomposition assistant. Given a compound user question about their expenses, break it into simpler sub-questions that can each be answered with a single SQL query.
+
+Return ONLY a valid JSON object in this format:
+{{"sub_questions": ["sub question 1", "sub question 2"]}}
+
+If the question is simple (doesn't need decomposition), return: {{"simple": true}}
+
+Guidelines:
+- Each sub-question must be self-contained and answerable independently with one SQL query
+- Max 3 sub-questions
+- Include date context ("this month", "last month") in each sub-question if relevant
+- Preserve any specific amounts, categories, or filters mentioned
+
+Examples:
+
+Q: How much did I spend on Food this month and what was my biggest Transport expense?
+{{"sub_questions": ["How much on Food this month?", "What was my biggest Transport expense this month?"]}}
+
+Q: Show me all expenses from my most expensive category this month
+{{"sub_questions": ["What category did I spend the most on this month?", "Show all expenses in Food category this month"]}}
+
+Q: What's my total spending this month and how many transactions did I make?
+{{"sub_questions": ["What is my total spending this month?", "How many transactions did I make this month?"]}}
+
+Q: How much on Transport this month?
+{{"simple": true}}
+
+Question: {question}
+Return ONLY valid JSON:"""
+
+
+def decompose_question(question, schema):
+    """Break a compound question into simpler sub-questions. Returns None if simple."""
+    if not _has_api_key():
+        return None
+    if not _is_compound_question(question):
+        return None
+
+    prompt = DECOMPOSE_PROMPT.format(question=question)
+    try:
+        client = _get_client()
+        response = client.chat.completions.create(
+            model="llama-3.1-8b-instant",
+            messages=[
+                {"role": "system", "content": "You are a query decomposition assistant. Return only valid JSON."},
+                {"role": "user", "content": prompt},
+            ],
+            temperature=0.1,
+            max_tokens=200,
+        )
+        text = response.choices[0].message.content.strip().strip("```").strip()
+        if text.lower().startswith("json"):
+            text = text[4:].strip()
+        result = json.loads(text)
+        if result.get("simple") or not result.get("sub_questions"):
+            return None
+        subs = result["sub_questions"]
+        if len(subs) < 2:
+            return None
+        return subs[:3]
+    except Exception:
+        return None
+
+
+COMPOSE_PROMPT = """You are a friendly Bangladeshi personal finance assistant. Today is {today}.
+
+You answered several sub-questions for the user. Combine the results into a single natural answer.
+
+Original question: {question}
+
+Sub-results:
+{sub_results}{history}
+
+Rules:
+- Provide a concise 1-3 sentence answer in English.
+- Use ৳ symbol for BDT amounts.
+- Round amounts to 2 decimal places.
+- Do NOT mention sub-questions or the decomposition process.
+- Be specific and helpful.
+
+Answer:"""
+
+
+def compose_answers(question, sub_results, history=None):
+    """Combine results from multiple sub-questions into one answer."""
+    if not _has_api_key():
+        answers = [r.get("answer", "") for r in sub_results if r.get("answer")]
+        return " ".join(answers) if answers else None
+
+    today = _d.today().strftime("%B %d, %Y")
+    results_str = "\n".join(
+        f"Sub-answer {i+1}: {r.get('answer', '')}"
+        for i, r in enumerate(sub_results)
+    )
+    hist_text = _fmt_history(history)
+
+    prompt = COMPOSE_PROMPT.format(
+        question=question, sub_results=results_str,
+        today=today, history=hist_text,
+    )
+    try:
+        client = _get_client()
+        response = client.chat.completions.create(
+            model="llama-3.1-8b-instant",
+            messages=[
+                {"role": "system", "content": "You are a friendly Bangladeshi personal finance assistant."},
+                {"role": "user", "content": prompt},
+            ],
+            temperature=0.1,
+            max_tokens=300,
+        )
+        return response.choices[0].message.content.strip()
+    except Exception:
+        answers = [r.get("answer", "") for r in sub_results if r.get("answer")]
+        return " ".join(answers) if answers else None
+
+
 def transcribe_audio(audio_bytes, mime_type="audio/webm"):
     client = Groq()
     ext = mime_type.split("/")[-1] if "/" in mime_type else "webm"
