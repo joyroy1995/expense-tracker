@@ -469,6 +469,15 @@ def answer_from_results(question, sql, results, history=None):
         return None
 
 
+def _display_cat(cat):
+    """Format a category value for display, handling internal names like __overall__."""
+    if not cat:
+        return ""
+    if cat == "__overall__":
+        return "Overall"
+    return cat
+
+
 def format_answer(columns, data, question):
     """Generate natural language answer from query results without an LLM call."""
     if not data:
@@ -493,7 +502,7 @@ def format_answer(columns, data, question):
         remaining = float(row.get(remaining_col, 0))
         budget = float(row.get(budget_col, 0))
         spent = float(row.get(amt_col, 0)) if amt_col else 0
-        cat = row.get(cat_col, "") if cat_col else ""
+        cat = _display_cat(row.get(cat_col, "")) if cat_col else ""
         prefix = f" for {cat}" if cat else ""
         if remaining > 0:
             return f"You have ৳{remaining:.2f} remaining{prefix} (spent ৳{spent:.2f} of ৳{budget:.2f} budget)."
@@ -548,7 +557,7 @@ def format_answer(columns, data, question):
         row = data[0]
         val = float(row.get(max_col or min_col, 0))
         desc = row.get(desc_col, "")
-        cat = row.get(cat_col, "")
+        cat = _display_cat(row.get(cat_col, ""))
         suffix = f" ({desc})" if desc else f" in {cat}" if cat else ""
         label = "Most" if max_col else "Least"
         return f"{label} expensive{suffix}: ৳{val:.2f}."
@@ -557,7 +566,7 @@ def format_answer(columns, data, question):
     if cat_col and amt_col and len(data) > 1:
         total = sum(float(r.get(amt_col, 0)) for r in data)
         top = max(data, key=lambda r: float(r.get(amt_col, 0)))
-        return f"Total: ৳{total:.2f} across {len(data)} categories. Most spent on {top[cat_col]} (৳{float(top[amt_col]):.2f})."
+        return f"Total: ৳{total:.2f} across {len(data)} categories. Most spent on {_display_cat(top[cat_col])} (৳{float(top[amt_col]):.2f})."
 
     # --- General list ---
     total = sum(float(r.get(amt_col, 0)) for r in data) if amt_col else 0
