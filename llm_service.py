@@ -959,8 +959,6 @@ _COMPOUND_INDICATORS = [
     " and list ", " and give ",
     " then ", " also ",
     "after that", "before that",
-    "most expensive category ",
-    "biggest expense ",
 ]
 
 def _is_compound_question(question):

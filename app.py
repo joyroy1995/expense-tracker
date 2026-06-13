@@ -55,6 +55,9 @@ def _validate_sql(sql):
     s = sql.strip()
     while s.endswith(";"):
         s = s[:-1].strip()
+    # Reject multiple statements (semicolons within the query)
+    if ";" in s:
+        return False
     if not s.upper().startswith("SELECT"):
         return False
     if "--" in s or "/*" in s or "*/" in s:
