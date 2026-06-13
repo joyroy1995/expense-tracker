@@ -231,10 +231,21 @@ def predict_expense(description, learned_categories=None):
 
 # ── NL Q&A ──────────────────────────────────────────────────
 
+def _fmt_history(history):
+    if not history:
+        return ""
+    lines = ["\n---\nConversation history:"]
+    for h in history[-6:]:
+        role = "User" if h["role"] == "user" else "Assistant"
+        lines.append(f"{role}: {h['content']}")
+    lines.append("---")
+    return "\n".join(lines)
+
+
 SQL_PROMPT = """You are a SQL query generator for a personal expense tracker. Given a user's natural language question, generate a SQL query to answer it.
 
 Database schema:
-{schema}
+{schema}{history}
 
 Rules:
 1. Return ONLY the SQL query — no explanation, no markdown formatting, no backticks.
@@ -277,7 +288,7 @@ ANSWER_PROMPT = """You are a friendly Bangladeshi personal finance assistant. Gi
 
 Question: {question}
 SQL: {sql}
-Results: {results}
+Results: {results}{history}
 
 Rules:
 - Provide a concise 1-3 sentence answer in English.
@@ -290,10 +301,11 @@ Rules:
 Answer:"""
 
 
-def generate_sql(question, schema):
+def generate_sql(question, schema, history=None):
     if not _has_api_key():
         return None
-    prompt = SQL_PROMPT.format(schema=schema, question=question)
+    hist_text = _fmt_history(history)
+    prompt = SQL_PROMPT.format(schema=schema, question=question, history=hist_text)
     try:
         client = _get_client()
         response = client.chat.completions.create(
@@ -314,11 +326,12 @@ def generate_sql(question, schema):
         return None
 
 
-def answer_from_results(question, sql, results):
+def answer_from_results(question, sql, results, history=None):
     if not _has_api_key():
         return None
     results_str = json.dumps(results, indent=2, ensure_ascii=False)
-    prompt = ANSWER_PROMPT.format(question=question, sql=sql, results=results_str)
+    hist_text = _fmt_history(history)
+    prompt = ANSWER_PROMPT.format(question=question, sql=sql, results=results_str, history=hist_text)
     try:
         client = _get_client()
         response = client.chat.completions.create(

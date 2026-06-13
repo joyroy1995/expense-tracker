@@ -492,17 +492,13 @@ async function renderHome(page = 1) {
         <h2 class="card-title" style="margin-bottom:0;">
           <span class="ai-icon">🤖</span> Ask AI
         </h2>
-        <span class="collapse-icon" id="aiChatCollapseIcon">▼</span>
+        <div class="card-header-actions" style="display:flex;align-items:center;gap:8px;">
+          <button class="chat-clear-btn" id="chatClearBtn" title="Clear chat">&times;</button>
+          <span class="collapse-icon" id="aiChatCollapseIcon">▼</span>
+        </div>
       </div>
       <div id="aiChatBody" class="chat-body">
-        <div class="chat-messages" id="chatMessages">
-          <div class="chat-message ai-message">
-            <div class="chat-bubble ai-bubble welcome-bubble">
-              Ask me anything about your expenses!<br>
-              <small>e.g., <em>"How much did I spend on chira this month?"</em></small>
-            </div>
-          </div>
-        </div>
+        <div class="chat-messages" id="chatMessages"></div>
         <div class="chat-input-area">
           <input type="text" id="chatInput" placeholder="Ask a question..." autocomplete="off">
           <button id="chatSendBtn" class="btn btn-primary" onclick="sendChatMessage()">Send</button>
@@ -1060,16 +1056,33 @@ let chatMessages = [];
 function initChatCard() {
   const toggle = document.getElementById('aiChatToggle');
   const input = document.getElementById('chatInput');
+  const clearBtn = document.getElementById('chatClearBtn');
+  const body = document.getElementById('aiChatBody');
+  const icon = document.getElementById('aiChatCollapseIcon');
+
+  // Restore collapse state from localStorage
+  if (body && icon) {
+    const collapsed = localStorage.getItem('aiChatCollapsed') === 'true';
+    if (collapsed) {
+      body.classList.add('chat-body-collapsed');
+      icon.textContent = '▶';
+    } else {
+      body.classList.remove('chat-body-collapsed');
+      icon.textContent = '▼';
+    }
+  }
+
   if (toggle) {
     toggle.addEventListener('click', () => {
-      const body = document.getElementById('aiChatBody');
-      const icon = document.getElementById('aiChatCollapseIcon');
       if (body && icon) {
         body.classList.toggle('chat-body-collapsed');
-        icon.textContent = body.classList.contains('chat-body-collapsed') ? '▶' : '▼';
+        const collapsed = body.classList.contains('chat-body-collapsed');
+        icon.textContent = collapsed ? '▶' : '▼';
+        localStorage.setItem('aiChatCollapsed', collapsed);
       }
     });
   }
+
   if (input) {
     input.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' && !e.shiftKey) {
@@ -1078,36 +1091,109 @@ function initChatCard() {
       }
     });
   }
+
+  if (clearBtn) {
+    clearBtn.addEventListener('click', () => {
+      chatMessages = [];
+      const container = document.getElementById('chatMessages');
+      if (container) {
+        container.innerHTML = getWelcomeHtml();
+      }
+      const ci = document.getElementById('chatInput');
+      if (ci) ci.focus();
+    });
+  }
 }
 
-function addChatMessage(type, content, sql) {
-  chatMessages.push({ type, content, sql });
+function getWelcomeHtml() {
+  return `<div class="chat-message ai-message">
+    <div class="chat-bubble ai-bubble welcome-bubble">
+      Ask me anything about your expenses!<br>
+      <small>e.g., <em>"How much did I spend on chira this month?"</em></small>
+    </div>
+  </div>`;
+}
+
+function addChatMessage(type, content, sql, data, columns, suggestions) {
+  chatMessages.push({ type, content, sql, data, columns, suggestions });
   renderChatMessages();
 }
+
+const SUGGESTIONS_POOL = [
+  "How does this compare to last month?",
+  "Show me the breakdown by category",
+  "What was my biggest expense?",
+  "What did I spend most on this month?",
+  "Show me all expenses over ৳1000",
+  "What's my average daily spending?",
+  "How much did I spend on groceries?",
+  "What's my total spending on transport?",
+];
 
 function renderChatMessages() {
   const container = document.getElementById('chatMessages');
   if (!container) return;
+  if (!chatMessages.length) {
+    container.innerHTML = getWelcomeHtml();
+    return;
+  }
   let html = chatMessages.map(msg => {
     if (msg.type === 'user') {
       return `<div class="chat-message user-message"><div class="chat-bubble user-bubble">${esc(msg.content)}</div></div>`;
     }
     if (msg.type === 'ai') {
       let h = `<div class="chat-message ai-message"><div class="chat-bubble ai-bubble">${esc(msg.content)}`;
-      // if (msg.sql) {
-      //   h += `<div class="chat-sql-toggle" onclick="this.nextElementSibling.classList.toggle('chat-sql-visible')">Show query</div>`;
-      //   h += `<pre class="chat-sql-block">${esc(msg.sql)}</pre>`;
-      // }
+      if (msg.data && msg.data.length) {
+        h += renderDataTable(msg.columns, msg.data);
+      }
+      if (msg.sql) {
+        h += `<div class="chat-sql-toggle" onclick="this.nextElementSibling.classList.toggle('chat-sql-visible')">Show SQL</div>`;
+        h += `<pre class="chat-sql-block">${esc(msg.sql)}</pre>`;
+      }
       h += `</div></div>`;
+      if (msg.suggestions && msg.suggestions.length) {
+        h += `<div class="chat-suggestion-chips">`;
+        msg.suggestions.forEach(s => {
+          const safe = s.replace(/'/g, "\\'");
+          h += `<button class="chat-suggestion-chip" onclick="sendSuggestion('${safe}')">${esc(s)}</button>`;
+        });
+        h += `</div>`;
+      }
       return h;
     }
     if (msg.type === 'loading') {
-      return `<div class="chat-message ai-message"><div class="chat-bubble ai-bubble"><div class="chat-loader"><span class="spinner-sm"></span> Thinking...</div></div></div>`;
+      return `<div class="chat-message ai-message"><div class="chat-bubble ai-bubble"><div class="chat-loader"><span class="typing-dots"><span></span><span></span><span></span></span></div></div></div>`;
     }
     return '';
   }).join('');
   container.innerHTML = html;
   container.scrollTop = container.scrollHeight;
+}
+
+function renderDataTable(columns, data) {
+  if (!columns || !columns.length || !data || !data.length) return '';
+  const maxRows = 10;
+  const rows = data.slice(0, maxRows);
+  let h = '<div class="chat-data-table"><table><thead><tr>';
+  columns.forEach(c => { h += `<th>${esc(c)}</th>`; });
+  h += '</tr></thead><tbody>';
+  rows.forEach(r => {
+    h += '<tr>';
+    columns.forEach(c => {
+      let v = r[c];
+      if (typeof v === 'number') {
+        v = c.toLowerCase().includes('amount') || c === 'total' ? `৳${v.toFixed(2)}` : v;
+      }
+      h += `<td>${v != null ? esc(String(v)) : ''}</td>`;
+    });
+    h += '</tr>';
+  });
+  h += '</tbody></table>';
+  if (data.length > maxRows) {
+    h += `<div class="chat-table-more">+${data.length - maxRows} more</div>`;
+  }
+  h += '</div>';
+  return h;
 }
 
 async function sendChatMessage() {
@@ -1116,21 +1202,63 @@ async function sendChatMessage() {
   const question = input.value.trim();
   if (!question) return;
   input.value = '';
+
+  // Build conversation history (last 6 pairs)
+  const history = [];
+  for (const m of chatMessages) {
+    if (m.type === 'ai' || m.type === 'user') {
+      history.push({ role: m.type, content: m.content });
+    }
+  }
+
   addChatMessage('user', question);
   addChatMessage('loading', '');
-  const res = await api.post('/api/ask', { question });
+  const res = await api.post('/api/ask', { question, history: history.slice(-12) });
   chatMessages = chatMessages.filter(m => m.type !== 'loading');
   if (!res.ok) {
     addChatMessage('ai', 'Sorry, I couldn\'t process that. ' + (res.error || 'Please try again.'));
     return;
   }
   const d = res.data;
-  addChatMessage('ai', d.answer || 'I found ' + (d.data ? d.data.length : 0) + ' result(s).', d.sql);
+
+  // Pick 2-3 contextual suggestion chips
+  const suggestions = pickSuggestions(question, d.answer);
+
+  addChatMessage('ai', d.answer || 'I found ' + (d.data ? d.data.length : 0) + ' result(s).', d.sql, d.data, d.columns, suggestions);
+
   const body = document.getElementById('aiChatBody');
   const icon = document.getElementById('aiChatCollapseIcon');
   if (body && body.classList.contains('chat-body-collapsed')) {
     body.classList.remove('chat-body-collapsed');
     if (icon) icon.textContent = '▼';
+    localStorage.setItem('aiChatCollapsed', 'false');
+  }
+}
+
+function pickSuggestions(question, answer) {
+  const q = question.toLowerCase();
+  const pool = [...SUGGESTIONS_POOL];
+  const picks = [];
+
+  // Remove the current question pattern from pool
+  const filtered = pool.filter(s => {
+    const sl = s.toLowerCase();
+    return !q.includes(sl) || sl.includes(q);
+  });
+
+  // Pick 3 random from filtered
+  for (let i = 0; i < 3 && filtered.length; i++) {
+    const idx = Math.floor(Math.random() * filtered.length);
+    picks.push(filtered.splice(idx, 1)[0]);
+  }
+  return picks;
+}
+
+function sendSuggestion(text) {
+  const input = document.getElementById('chatInput');
+  if (input) {
+    input.value = text;
+    sendChatMessage();
   }
 }
 

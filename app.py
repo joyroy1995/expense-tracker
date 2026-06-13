@@ -362,11 +362,13 @@ def api_ask():
     if not question:
         return jsonify({"error": "Question required"}), 400
 
+    history = data.get("history", [])
+
     schema = db.get_schema()
     current_date = datetime.now(TIMEZONE).strftime("%B %d, %Y")
     question_with_context = f"Today is {current_date}.\n\nQuestion: {question}"
 
-    sql = generate_sql(question_with_context, schema)
+    sql = generate_sql(question_with_context, schema, history=history)
     if not sql:
         return jsonify({"error": "Could not generate SQL query. Check API key."}), 500
 
@@ -384,7 +386,7 @@ def api_ask():
     except Exception as e:
         return jsonify({"error": f"Query execution failed: {str(e)}", "sql": sql}), 500
 
-    answer = answer_from_results(question, sql, data[:20])
+    answer = answer_from_results(question, sql, data[:20], history=history)
     if not answer:
         total = len(data)
         answer = f"I found {total} result(s) based on your data. Check the data above for details."
