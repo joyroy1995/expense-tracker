@@ -379,7 +379,7 @@ def _fix_description_filter(sql, question):
         pos = sql.upper().find(kw)
         if pos != -1 and pos < insert_at:
             insert_at = pos
-    clause = f" AND description LIKE '%{keyword}%'"
+    clause = f" AND LOWER(description) LIKE '%{keyword}%'"
     return sql[:insert_at] + clause + sql[insert_at:]
 
 
