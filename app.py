@@ -403,6 +403,32 @@ def _fix_aggregate_sql(sql, question):
     return f"SELECT COALESCE(SUM(amount), 0) as total FROM {from_clause}"
 
 
+def _fix_budget_query(sql, question):
+    """Replace SQL with a proper budget query when the question asks about budget
+    but the generated SQL doesn't reference the budgets table."""
+    q = question.lower()
+    if not re.search(r'\bbudget\b', q):
+        return sql
+    if 'budgets' in sql.lower():
+        return sql
+
+    month = datetime.now(TIMEZONE).strftime("%Y-%m")
+    m = re.search(r"date\s+LIKE\s+'(\d{4}-\d{2})%'", sql)
+    if m:
+        month = m.group(1)
+
+    mentioned_cat = None
+    for cat in sorted(_ALL_CATEGORIES, key=len, reverse=True):
+        if cat.lower() in q:
+            mentioned_cat = cat
+            break
+
+    if mentioned_cat:
+        return f"SELECT b.category, b.amount as budget_amount, COALESCE(SUM(e.amount), 0) as spent, b.amount - COALESCE(SUM(e.amount), 0) as remaining FROM budgets b LEFT JOIN expenses e ON e.user_id = b.user_id AND e.category = b.category AND e.date LIKE '{month}%' WHERE b.user_id = :uid AND b.category = '{mentioned_cat}' GROUP BY b.id, b.category, b.amount"
+
+    return f"SELECT b.category, b.amount as budget_amount, (SELECT COALESCE(SUM(amount), 0) FROM expenses WHERE user_id = :uid AND date LIKE '{month}%') as spent, (SELECT COALESCE(SUM(amount), 0) FROM expenses WHERE user_id = :uid AND date LIKE '{month}%') as remaining FROM budgets b WHERE b.user_id = :uid AND b.category = '__overall__'"
+
+
 # ── API: Auth ──────────────────────────────────────────────
 
 @app.route("/api/me")
@@ -718,6 +744,7 @@ def _run_qa_pipeline(question, question_with_context, schema, history, uid, forc
     sql = _fix_aggregate_sql(sql, question)
     sql = _fix_show_expenses_aggregate(sql, question)
     sql = _fix_description_filter(sql, question)
+    sql = _fix_budget_query(sql, question)
 
     try:
         conn = db.get_connection()
@@ -741,6 +768,7 @@ def _run_qa_pipeline(question, question_with_context, schema, history, uid, forc
             corrected = _fix_aggregate_sql(corrected, question)
             corrected = _fix_show_expenses_aggregate(corrected, question)
             corrected = _fix_description_filter(corrected, question)
+            corrected = _fix_budget_query(corrected, question)
             try:
                 conn2 = db.get_connection()
                 result = conn2.execute(db.text(corrected), {"uid": uid})
