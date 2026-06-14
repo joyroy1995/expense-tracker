@@ -350,6 +350,11 @@ def _fix_show_expenses_aggregate(sql, question):
     return f"SELECT id, date, description, category, amount FROM {parts[1].strip()}"
 
 
+_SKIP_WORDS = frozenset({'all', 'my', 'your', 'the', 'this', 'that', 'these', 'those', 'show',
+                          'list', 'get', 'give', 'find', 'see', 'view', 'display', 'print',
+                          'any', 'some', 'every', 'each', 'total', 'month', 'day', 'week', 'year'})
+
+
 def _extract_item_keyword(q):
     """Extract a potential item keyword from a question for description LIKE filtering."""
     # Pattern 1: "bought/buy/purchase X"
@@ -364,6 +369,12 @@ def _extract_item_keyword(q):
     m = re.search(r'\bhow\s+much\s+(?:on|for)\s+(?:a\s+|an\s+|the\s+)?(\w+)', q)
     if m:
         return m.group(1).strip()
+    # Pattern 4: "X expenses" — word right before "expenses/expense" (e.g. "rickshaw expenses")
+    m = re.search(r'\b(\w+)\s+expenses?\b', q)
+    if m:
+        word = m.group(1).strip()
+        if word not in _SKIP_WORDS:
+            return word
     return None
 
 def _fix_description_filter(sql, question):
