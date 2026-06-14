@@ -383,6 +383,26 @@ def _fix_description_filter(sql, question):
     return sql[:insert_at] + clause + sql[insert_at:]
 
 
+def _fix_aggregate_sql(sql, question):
+    """Convert list queries to aggregate when question asks for total/amount/sum/how much."""
+    q = question.lower()
+    if not re.search(r'\b(?:how\s+much|total|sum|amount)\b', q):
+        return sql
+    if re.search(r'\b(?:SUM|COUNT|AVG|COALESCE)\s*\(', sql, re.IGNORECASE):
+        return sql
+    if re.search(r'\bGROUP\s+BY\b', sql, re.IGNORECASE):
+        return sql
+    parts = re.split(r'\bFROM\b', sql, maxsplit=1, flags=re.IGNORECASE)
+    if len(parts) < 2:
+        return sql
+    from_clause = parts[1].strip()
+    for kw in [' ORDER BY ', ' LIMIT ', ' OFFSET ']:
+        pos = from_clause.upper().find(kw)
+        if pos != -1:
+            from_clause = from_clause[:pos]
+    return f"SELECT COALESCE(SUM(amount), 0) as total FROM {from_clause}"
+
+
 # ── API: Auth ──────────────────────────────────────────────
 
 @app.route("/api/me")
@@ -695,6 +715,7 @@ def _run_qa_pipeline(question, question_with_context, schema, history, uid, forc
     sql = _fix_ordinal_limit(sql, question)
     sql = _fix_history_id_filter(sql, question)
     sql = _fix_date_filter(sql, question)
+    sql = _fix_aggregate_sql(sql, question)
     sql = _fix_show_expenses_aggregate(sql, question)
     sql = _fix_description_filter(sql, question)
 
@@ -717,6 +738,7 @@ def _run_qa_pipeline(question, question_with_context, schema, history, uid, forc
             corrected = _fix_ordinal_limit(corrected, question)
             corrected = _fix_history_id_filter(corrected, question)
             corrected = _fix_date_filter(corrected, question)
+            corrected = _fix_aggregate_sql(corrected, question)
             corrected = _fix_show_expenses_aggregate(corrected, question)
             corrected = _fix_description_filter(corrected, question)
             try:
