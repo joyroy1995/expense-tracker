@@ -220,9 +220,14 @@ def _fix_frequency_sql(sql, question):
 
 
 def _fix_top_n_limit(sql, question):
-    """Fix LIMIT clause when question explicitly says 'top N' / 'last N' / 'N expenses'."""
+    """Fix LIMIT clause when question explicitly says 'top N' / 'last N' / 'N expenses'.
+    Skips when N refers to a time period (e.g. 'last 7 days') rather than row count."""
     m = re.search(r'\b(top|last|first)\s+(\d+)\b', question, re.IGNORECASE)
     if not m:
+        return sql
+    # If followed by a time unit, it's a time period, not a row limit
+    rest = question[m.end():].strip()
+    if re.match(r'\b(day|days|week|weeks|month|months|year|years|hour|hours)\b', rest, re.IGNORECASE):
         return sql
     n = int(m.group(2))
     if 'LIMIT' in sql.upper():
@@ -320,16 +325,21 @@ def _fix_date_filter(sql, question):
 
 
 def _fix_show_expenses_aggregate(sql, question):
-    """Rewrite aggregate queries to individual records when user asks to 'show expenses'."""
+    """Rewrite aggregate queries to individual records when user asks to 'show expenses'
+    or asks about a specific expense item (e.g. 'which date i bought X')."""
     q = question.lower()
     show_intent = bool(re.search(r'\b(?:show|list|display)\b', q)) or \
                   bool(re.search(r'\bwhat\s+(?:are|were|is|was)\b.*\b(?:expense|transaction|record)', q))
-    if not show_intent:
+    # Detect item lookup: "which date/day did I buy X", "when did I buy X"
+    item_intent = bool(re.search(r'\b(?:which\s+(?:date|day)|when)\b', q)) and \
+                  bool(re.search(r'\b(?:bought|buy|purchase|purchased|get|got)\b', q))
+    if not show_intent and not item_intent:
         return sql
-    if not re.search(r'\b(?:expense|expenses|transaction|transactions|record|records)\b', q):
-        return sql
-    if re.search(r'\b(?:how\s+much|total|sum|amount|spent|spend)\b', q):
-        return sql
+    if show_intent:
+        if not re.search(r'\b(?:expense|expenses|transaction|transactions|record|records)\b', q):
+            return sql
+        if re.search(r'\b(?:how\s+much|total|sum|amount|spent|spend)\b', q):
+            return sql
     if not re.search(r'\b(?:SUM|COUNT|AVG|COALESCE)\s*\(', sql, re.IGNORECASE):
         return sql
     if re.search(r'\bGROUP\s+BY\b', sql, re.IGNORECASE):
@@ -338,6 +348,39 @@ def _fix_show_expenses_aggregate(sql, question):
     if len(parts) < 2:
         return sql
     return f"SELECT id, date, description, category, amount FROM {parts[1].strip()}"
+
+
+def _extract_item_keyword(q):
+    """Extract a potential item keyword from a question for description LIKE filtering."""
+    # Pattern 1: "bought/buy/purchase X"
+    m = re.search(r'\b(?:bought|buy|purchase|purchased|get|got)\s+(?:a\s+|an\s+|the\s+|some\s+)?(\w+)', q)
+    if m:
+        return m.group(1).strip()
+    # Pattern 2: "spent/spend on X" or "spent on X fare/ticket/etc"
+    m = re.search(r'\b(?:spent|spend)\s+on\s+(?:a\s+|an\s+|the\s+)?(\w+(?:\s+\w+)?)', q)
+    if m:
+        return m.group(1).strip().split()[0]
+    # Pattern 3: "on X" after "how much" (e.g. "how much on rickshaw")
+    m = re.search(r'\bhow\s+much\s+(?:on|for)\s+(?:a\s+|an\s+|the\s+)?(\w+)', q)
+    if m:
+        return m.group(1).strip()
+    return None
+
+def _fix_description_filter(sql, question):
+    """If the question mentions a specific item and the SQL lacks a description LIKE filter, add one."""
+    q = question.lower()
+    if re.search(r"description\s+LIKE", sql, re.IGNORECASE):
+        return sql
+    keyword = _extract_item_keyword(q)
+    if not keyword or len(keyword) < 2 or keyword in [c.lower() for c in _ALL_CATEGORIES]:
+        return sql
+    insert_at = len(sql)
+    for kw in [' ORDER BY ', ' GROUP BY ', ' LIMIT ', ' OFFSET ', ' HAVING ']:
+        pos = sql.upper().find(kw)
+        if pos != -1 and pos < insert_at:
+            insert_at = pos
+    clause = f" AND description LIKE '%{keyword}%'"
+    return sql[:insert_at] + clause + sql[insert_at:]
 
 
 # ── API: Auth ──────────────────────────────────────────────
@@ -653,6 +696,7 @@ def _run_qa_pipeline(question, question_with_context, schema, history, uid, forc
     sql = _fix_history_id_filter(sql, question)
     sql = _fix_date_filter(sql, question)
     sql = _fix_show_expenses_aggregate(sql, question)
+    sql = _fix_description_filter(sql, question)
 
     try:
         conn = db.get_connection()
@@ -674,6 +718,7 @@ def _run_qa_pipeline(question, question_with_context, schema, history, uid, forc
             corrected = _fix_history_id_filter(corrected, question)
             corrected = _fix_date_filter(corrected, question)
             corrected = _fix_show_expenses_aggregate(corrected, question)
+            corrected = _fix_description_filter(corrected, question)
             try:
                 conn2 = db.get_connection()
                 result = conn2.execute(db.text(corrected), {"uid": uid})
