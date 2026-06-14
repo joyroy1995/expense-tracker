@@ -352,7 +352,10 @@ def _fix_show_expenses_aggregate(sql, question):
 
 _SKIP_WORDS = frozenset({'all', 'my', 'your', 'the', 'this', 'that', 'these', 'those', 'show',
                           'list', 'get', 'give', 'find', 'see', 'view', 'display', 'print',
-                          'any', 'some', 'every', 'each', 'total', 'month', 'day', 'week', 'year'})
+                          'any', 'some', 'every', 'each', 'total', 'month', 'day', 'week', 'year',
+                          'biggest', 'largest', 'smallest', 'cheapest', 'most', 'least',
+                          'highest', 'lowest', 'best', 'worst', 'recent', 'last', 'first',
+                          'previous', 'next', 'top', 'bottom'})
 
 
 def _extract_item_keyword(q):
@@ -383,7 +386,7 @@ def _fix_description_filter(sql, question):
     if re.search(r"description\s+LIKE", sql, re.IGNORECASE):
         return sql
     keyword = _extract_item_keyword(q)
-    if not keyword or len(keyword) < 2 or keyword in [c.lower() for c in _ALL_CATEGORIES]:
+    if not keyword or len(keyword) < 2 or keyword in [c.lower() for c in _ALL_CATEGORIES] or keyword.endswith('est'):
         return sql
     insert_at = len(sql)
     for kw in [' ORDER BY ', ' GROUP BY ', ' LIMIT ', ' OFFSET ', ' HAVING ']:
