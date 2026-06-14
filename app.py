@@ -293,6 +293,25 @@ def _fix_most_expensive_sql(sql, question):
     return sql
 
 
+def _fix_category_breakdown_sql(sql, question):
+    """Convert plain list SQL to category breakdown when question asks for
+    breakdown by category (LLM may generate a flat list instead)."""
+    q = question.lower()
+    if not re.search(r'\b(?:breakdown\s+by\s+category|category\s+breakdown|by\s+category)\b', q):
+        return sql
+    if re.search(r'\bGROUP\s+BY\b', sql, re.IGNORECASE):
+        return sql
+    parts = re.split(r'\bFROM\b', sql, maxsplit=1, flags=re.IGNORECASE)
+    if len(parts) < 2:
+        return sql
+    from_clause = parts[1].strip()
+    for kw in [' ORDER BY ', ' LIMIT ', ' OFFSET ', ' HAVING ']:
+        pos = from_clause.upper().find(kw)
+        if pos != -1:
+            from_clause = from_clause[:pos]
+    return f"SELECT category, COALESCE(SUM(amount), 0) as total, COUNT(*) as count FROM {from_clause} GROUP BY category ORDER BY total DESC"
+
+
 def _fix_history_id_filter(sql, question):
     """Strip stale id exclusion filters left over from history context.
     Removes AND id != N / AND expenses.id != N / AND e.id != N patterns
@@ -775,6 +794,7 @@ def _run_qa_pipeline(question, question_with_context, schema, history, uid, forc
     sql = _fix_limit_syntax(sql, question)
     sql = _fix_ordinal_limit(sql, question)
     sql = _fix_most_expensive_sql(sql, question)
+    sql = _fix_category_breakdown_sql(sql, question)
     sql = _fix_history_id_filter(sql, question)
     sql = _fix_date_filter(sql, question)
     sql = _fix_aggregate_sql(sql, question)
@@ -800,6 +820,7 @@ def _run_qa_pipeline(question, question_with_context, schema, history, uid, forc
             corrected = _fix_limit_syntax(corrected, question)
             corrected = _fix_ordinal_limit(corrected, question)
             corrected = _fix_most_expensive_sql(corrected, question)
+            corrected = _fix_category_breakdown_sql(corrected, question)
             corrected = _fix_history_id_filter(corrected, question)
             corrected = _fix_date_filter(corrected, question)
             corrected = _fix_aggregate_sql(corrected, question)
