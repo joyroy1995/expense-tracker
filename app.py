@@ -302,25 +302,32 @@ def _fix_date_filter(sql, question):
     Replaces date LIKE 'YYYY-MM%'  with date = 'YYYY-MM-DD' when the
     question contains a YYYY-MM-DD literal or 'on <date>' pattern."""
     m = re.search(r'\b(\d{4})-(\d{2})-(\d{2})\b', question)
-    if not m:
-        return sql
-    exact_date = m.group(0)
-    month_pattern = exact_date[:7]  # YYYY-MM
-    # Replace date LIKE 'YYYY-MM%'  with date = 'YYYY-MM-DD'
-    sql = re.sub(
-        rf"date\s+LIKE\s*'{re.escape(month_pattern)}%'",
-        f"date = '{exact_date}'",
-        sql,
-        flags=re.IGNORECASE,
-    )
-    # Also fix date >= 'YYYY-MM-DD' AND date <= 'YYYY-MM-DD' ranges
-    # where both bounds are the same date (should be date = 'YYYY-MM-DD')
-    sql = re.sub(
-        rf"date\s*>=\s*'{exact_date}'\s+AND\s+date\s*<=\s*'{exact_date}'",
-        f"date = '{exact_date}'",
-        sql,
-        flags=re.IGNORECASE,
-    )
+    if m:
+        exact_date = m.group(0)
+        month_pattern = exact_date[:7]  # YYYY-MM
+        sql = re.sub(
+            rf"date\s+LIKE\s*'{re.escape(month_pattern)}%'",
+            f"date = '{exact_date}'",
+            sql,
+            flags=re.IGNORECASE,
+        )
+        sql = re.sub(
+            rf"date\s*>=\s*'{exact_date}'\s+AND\s+date\s*<=\s*'{exact_date}'",
+            f"date = '{exact_date}'",
+            sql,
+            flags=re.IGNORECASE,
+        )
+
+    # Reverse: expand exact date to month filter when question is about a month
+    # but the SQL uses a single date (LLM may use {today} instead of {current_month})
+    if re.search(r'\b(?:this\s+month|last\s+month|current\s+month)\b', question, re.IGNORECASE):
+        sql = re.sub(
+            r"date\s*=\s*'(\d{4})-(\d{2})-\d{2}'",
+            r"date LIKE '\1-\2%'",
+            sql,
+            flags=re.IGNORECASE,
+        )
+
     return sql
 
 
@@ -355,7 +362,8 @@ _SKIP_WORDS = frozenset({'all', 'my', 'your', 'the', 'this', 'that', 'these', 't
                           'any', 'some', 'every', 'each', 'total', 'month', 'day', 'week', 'year',
                           'biggest', 'largest', 'smallest', 'cheapest', 'most', 'least',
                           'highest', 'lowest', 'best', 'worst', 'recent', 'last', 'first',
-                          'previous', 'next', 'top', 'bottom'})
+                          'previous', 'next', 'top', 'bottom',
+                          'today', 'todays', 'tonight'})
 
 
 def _extract_item_keyword(q):
