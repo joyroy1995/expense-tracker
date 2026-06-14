@@ -1831,7 +1831,6 @@ const FOLLOWUP_TEMPLATES = {
     { text: 'Show top 5 expenses' },
   ],
   expense: [
-    { text: 'Show other expenses on {date}', show: a => a.date },
     { text: 'How much on {category} total?', show: a => a.category },
     { text: 'Show all {category} expenses', show: a => a.category },
     { text: 'Compare to last month' },
