@@ -280,6 +280,19 @@ def _fix_ordinal_limit(sql, question):
     return sql
 
 
+def _fix_most_expensive_sql(sql, question):
+    """Add ORDER BY amount DESC LIMIT 1 when question asks for the single
+    most expensive expense (LLM may omit sort/limit for 'most' queries)."""
+    q = question.lower()
+    if not re.search(r'\b(?:spend\s+the\s+most|spent\s+the\s+most|most\s+expensive|biggest\s+expense|largest\s+expense)\b', q):
+        return sql
+    if re.search(r'\bORDER\s+BY\b', sql, re.IGNORECASE):
+        return sql
+    sql = sql.rstrip().rstrip(';').strip()
+    sql += ' ORDER BY amount DESC LIMIT 1'
+    return sql
+
+
 def _fix_history_id_filter(sql, question):
     """Strip stale id exclusion filters left over from history context.
     Removes AND id != N / AND expenses.id != N / AND e.id != N patterns
@@ -761,6 +774,7 @@ def _run_qa_pipeline(question, question_with_context, schema, history, uid, forc
     sql = _fix_top_n_limit(sql, question)
     sql = _fix_limit_syntax(sql, question)
     sql = _fix_ordinal_limit(sql, question)
+    sql = _fix_most_expensive_sql(sql, question)
     sql = _fix_history_id_filter(sql, question)
     sql = _fix_date_filter(sql, question)
     sql = _fix_aggregate_sql(sql, question)
@@ -785,6 +799,7 @@ def _run_qa_pipeline(question, question_with_context, schema, history, uid, forc
             corrected = _fix_top_n_limit(corrected, question)
             corrected = _fix_limit_syntax(corrected, question)
             corrected = _fix_ordinal_limit(corrected, question)
+            corrected = _fix_most_expensive_sql(corrected, question)
             corrected = _fix_history_id_filter(corrected, question)
             corrected = _fix_date_filter(corrected, question)
             corrected = _fix_aggregate_sql(corrected, question)
