@@ -364,6 +364,16 @@ def _fix_date_filter(sql, question):
             flags=re.IGNORECASE,
         )
 
+    # Fix: when question asks about "today", make sure SQL uses today's actual date
+    if re.search(r'\btoday\b', question, re.IGNORECASE):
+        today_str = datetime.now(TIMEZONE).strftime("%Y-%m-%d")
+        sql = re.sub(
+            r"date\s*=\s*'\d{4}-\d{2}-\d{2}'",
+            f"date = '{today_str}'",
+            sql,
+            flags=re.IGNORECASE,
+        )
+
     return sql
 
 
