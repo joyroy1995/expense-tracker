@@ -193,7 +193,7 @@ def _fix_sort_column(sql, question):
 
 def _fix_frequency_sql(sql, question):
     """Post-process SQL to use COUNT(*) instead of SUM when user asks about frequency."""
-    if not re.search(r'\b(?:frequency|how\s+many\s+times|how\s+often|most\s+frequent|most\s+used|count)\b', question, re.IGNORECASE):
+    if not re.search(r'\b(?:frequency|how\s+many\s+times|how\s+often|most\s+frequent|most\s+used|use\s+the\s+most|used\s+the\s+most|count)\b', question, re.IGNORECASE):
         return sql
     sql_upper = sql.upper()
     # Only modify if the SQL uses SUM(amount) or SUM with a category GROUP BY
@@ -284,9 +284,13 @@ def _fix_most_expensive_sql(sql, question):
     """Add ORDER BY amount DESC LIMIT 1 when question asks for the single
     most expensive expense (LLM may omit sort/limit for 'most' queries)."""
     q = question.lower()
-    if not re.search(r'\b(?:spend\s+the\s+most|spent\s+the\s+most|most\s+expensive|biggest\s+expense|largest\s+expense)\b', q):
+    if not re.search(r'\b(?:most\s+expensive|biggest\s+expense|largest\s+expense)\b', q):
         return sql
     if re.search(r'\bORDER\s+BY\b', sql, re.IGNORECASE):
+        return sql
+    if re.search(r'\b(?:SUM|COUNT|AVG|COALESCE)\s*\(', sql, re.IGNORECASE):
+        return sql
+    if re.search(r'\bGROUP\s+BY\b', sql, re.IGNORECASE):
         return sql
     sql = sql.rstrip().rstrip(';').strip()
     sql += ' ORDER BY amount DESC LIMIT 1'
@@ -297,7 +301,7 @@ def _fix_category_breakdown_sql(sql, question):
     """Convert plain list SQL to category breakdown when question asks for
     breakdown by category (LLM may generate a flat list instead)."""
     q = question.lower()
-    if not re.search(r'\b(?:breakdown\s+by\s+category|category\s+breakdown|by\s+category)\b', q):
+    if not re.search(r'\b(?:breakdown\s+by\s+category|category\s+breakdown|by\s+category|which\s+category|spend\s+the\s+most\s+on|spent\s+the\s+most\s+on)\b', q):
         return sql
     if re.search(r'\bGROUP\s+BY\b', sql, re.IGNORECASE):
         return sql
@@ -793,11 +797,11 @@ def _run_qa_pipeline(question, question_with_context, schema, history, uid, forc
     sql = _fix_top_n_limit(sql, question)
     sql = _fix_limit_syntax(sql, question)
     sql = _fix_ordinal_limit(sql, question)
-    sql = _fix_most_expensive_sql(sql, question)
     sql = _fix_category_breakdown_sql(sql, question)
+    sql = _fix_aggregate_sql(sql, question)
+    sql = _fix_most_expensive_sql(sql, question)
     sql = _fix_history_id_filter(sql, question)
     sql = _fix_date_filter(sql, question)
-    sql = _fix_aggregate_sql(sql, question)
     sql = _fix_show_expenses_aggregate(sql, question)
     sql = _fix_description_filter(sql, question)
     sql = _fix_budget_query(sql, question)
@@ -819,11 +823,11 @@ def _run_qa_pipeline(question, question_with_context, schema, history, uid, forc
             corrected = _fix_top_n_limit(corrected, question)
             corrected = _fix_limit_syntax(corrected, question)
             corrected = _fix_ordinal_limit(corrected, question)
-            corrected = _fix_most_expensive_sql(corrected, question)
             corrected = _fix_category_breakdown_sql(corrected, question)
+            corrected = _fix_aggregate_sql(corrected, question)
+            corrected = _fix_most_expensive_sql(corrected, question)
             corrected = _fix_history_id_filter(corrected, question)
             corrected = _fix_date_filter(corrected, question)
-            corrected = _fix_aggregate_sql(corrected, question)
             corrected = _fix_show_expenses_aggregate(corrected, question)
             corrected = _fix_description_filter(corrected, question)
             corrected = _fix_budget_query(corrected, question)
