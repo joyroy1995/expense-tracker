@@ -364,12 +364,20 @@ def _fix_date_filter(sql, question):
             flags=re.IGNORECASE,
         )
 
-    # Fix: when question asks about "today", make sure SQL uses today's actual date
+    # Fix: when question asks about "today"/"yesterday", override the date in SQL
     if re.search(r'\btoday\b', question, re.IGNORECASE):
         today_str = datetime.now(TIMEZONE).strftime("%Y-%m-%d")
         sql = re.sub(
             r"date\s*=\s*'\d{4}-\d{2}-\d{2}'",
             f"date = '{today_str}'",
+            sql,
+            flags=re.IGNORECASE,
+        )
+    elif re.search(r'\byesterday\b|\blast\s+(?:day|date|night|evening|morning|afternoon)\b', question, re.IGNORECASE):
+        yesterday_str = (datetime.now(TIMEZONE) - timedelta(days=1)).strftime("%Y-%m-%d")
+        sql = re.sub(
+            r"date\s*=\s*'\d{4}-\d{2}-\d{2}'",
+            f"date = '{yesterday_str}'",
             sql,
             flags=re.IGNORECASE,
         )
