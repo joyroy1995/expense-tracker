@@ -409,7 +409,7 @@ _SKIP_WORDS = frozenset({'all', 'my', 'your', 'the', 'this', 'that', 'these', 't
                           'biggest', 'largest', 'smallest', 'cheapest', 'most', 'least',
                           'highest', 'lowest', 'best', 'worst', 'recent', 'last', 'first',
                           'previous', 'next', 'top', 'bottom',
-                          'today', 'todays', 'tonight'})
+                          'today', 'todays', 'tonight', 'yesterday', 'yesterdays'})
 
 
 def _extract_item_keyword(q):
