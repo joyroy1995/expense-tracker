@@ -899,9 +899,15 @@ async function renderDashboard(params) {
     (params.search ? `&search=${encodeURIComponent(params.search)}` : '') +
     (params.user_id ? `&user_id=${params.user_id}` : '');
 
-  const res = await api.get(`/api/dashboard?${qs}`);
-  if (!res.ok) { handleAuthError(res); return; }
-  const d = res.data;
+  const [dashRes, forecastRes] = await Promise.all([
+    api.get(`/api/dashboard?${qs}`),
+    (now.getFullYear() === year && now.getMonth() + 1 === month)
+      ? api.get('/api/forecast')
+      : Promise.resolve(null),
+  ]);
+  if (!dashRes.ok) { handleAuthError(dashRes); return; }
+  const d = dashRes.data;
+  const fc = forecastRes?.ok ? forecastRes.data : null;
   window.categoryColors = d.category_colors;
   expandedCategory = null;
   const monthNames = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
@@ -940,6 +946,62 @@ async function renderDashboard(params) {
           <option value="">All Users</option>
           ${opts}
         </select>
+      </div>`;
+  }
+
+  // ── Forecast card ──
+  let forecastHtml = '';
+  if (fc) {
+    const statusIcon = { over: '🚨', warning: '⚠️', under: '✅', no_budget: '📊' };
+    const statusClass = fc.status === 'over' ? 'over' : fc.status === 'warning' ? 'warning' : fc.status === 'under' ? 'under' : 'no_budget';
+    const vsMonthHtml = fc.vs_last_month
+      ? `<span class="forecast-vs ${fc.vs_last_month.direction}">${fc.vs_last_month.direction === 'up' ? '↑' : '↓'} ${Math.abs(fc.vs_last_month.pct)}% vs last month</span>`
+      : '';
+    const budgetHtml = fc.overall_budget != null ? `৳${Number(fc.overall_budget).toLocaleString(undefined, {minimumFractionDigits:0, maximumFractionDigits:0})}` : '—';
+    const barPct = fc.overall_budget && fc.overall_budget > 0
+      ? Math.min((fc.projected / fc.overall_budget) * 100, 100) : 0;
+    const dayPct = (fc.days_elapsed / fc.days_in_month) * 100;
+
+    forecastHtml = `
+      <div class="card forecast-card">
+        <div class="forecast-header">
+          <h2 class="card-title">📈 Spending Forecast</h2>
+          ${vsMonthHtml}
+        </div>
+        <div class="forecast-grid">
+          <div class="forecast-metric">
+            <div class="forecast-value">৳${Number(fc.spent_so_far).toLocaleString(undefined, {minimumFractionDigits:0, maximumFractionDigits:0})}</div>
+            <div class="forecast-label">Spent so far</div>
+          </div>
+          <div class="forecast-metric">
+            <div class="forecast-value">৳${Number(fc.daily_avg).toLocaleString(undefined, {minimumFractionDigits:0, maximumFractionDigits:0})}</div>
+            <div class="forecast-label">Avg / day</div>
+          </div>
+          <div class="forecast-metric">
+            <div class="forecast-value forecast-projected">৳${Number(fc.projected).toLocaleString(undefined, {minimumFractionDigits:0, maximumFractionDigits:0})}</div>
+            <div class="forecast-label">Projected</div>
+          </div>
+          <div class="forecast-metric">
+            <div class="forecast-value">${budgetHtml}</div>
+            <div class="forecast-label">Budget</div>
+          </div>
+        </div>
+        ${fc.overall_budget ? `
+        <div class="forecast-progress">
+          <div class="forecast-bar-track">
+            <div class="forecast-bar-fill" style="width:${barPct}%"></div>
+            <div class="forecast-bar-marker" style="left:${dayPct}%"></div>
+          </div>
+          <div class="forecast-bar-labels">
+            <span>Day ${fc.days_elapsed}</span>
+            <span>${fc.days_in_month} days</span>
+          </div>
+        </div>` : ''}
+        <div class="forecast-status forecast-status-${statusClass}">
+          <span>${statusIcon[fc.status] || '📊'}</span>
+          <span>${esc(fc.status_text)}</span>
+        </div>
+        ${fc.status === 'no_budget' ? `<a href="/budgets" data-link class="forecast-set-budget">Set a budget →</a>` : ''}
       </div>`;
   }
 
@@ -985,6 +1047,8 @@ async function renderDashboard(params) {
         <a href="/api/export/pdf?year=${year}&month=${month}${d.filter_user_id ? `&user_id=${d.filter_user_id}` : ''}${d.search_query ? `&search=${encodeURIComponent(d.search_query)}` : ''}" class="btn-export" title="Export as PDF"><span class="export-icon">📕</span> PDF</a>
       </div>
     </div>
+
+    ${forecastHtml}
 
     <div class="dashboard-grid">
       <div class="card chart-card">

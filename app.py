@@ -1600,6 +1600,78 @@ def api_daily_totals():
     return jsonify({"totals": totals_map, "year": year, "month": month})
 
 
+# ── Spending Forecast ──────────────────────────────────────
+
+@app.route("/api/forecast")
+@login_required
+def api_forecast():
+    uid = session["user_id"]
+    now = datetime.now(TIMEZONE)
+    year = now.year
+    month = now.month
+    today = now.day
+    days_in_month = calendar.monthrange(year, month)[1]
+
+    daily_totals = db.get_daily_totals(year, month, user_id=uid)
+    spent_so_far = sum(d["total"] for d in daily_totals)
+    daily_avg = spent_so_far / today if today > 0 else 0
+    projected = daily_avg * days_in_month
+
+    monthly_totals = db.get_monthly_totals(3, user_id=uid)
+    current_month_str = f"{year}-{month:02d}"
+    prev_month_total = None
+    for mt in monthly_totals:
+        if mt["month"] < current_month_str:
+            prev_month_total = mt["total"]
+            break
+
+    budget_status = db.get_budget_status(uid)
+    overall_budget = None
+    for b in budget_status:
+        if b["category"] == "__overall__":
+            overall_budget = b["budget_amount"]
+            break
+
+    if overall_budget and overall_budget > 0:
+        pct_of_budget = (projected / overall_budget) * 100
+        if pct_of_budget > 100:
+            status = "over"
+            status_text = f"Projected to exceed ৳{overall_budget:,.0f} budget"
+        elif pct_of_budget >= 90:
+            status = "warning"
+            status_text = f"Close to ৳{overall_budget:,.0f} budget limit"
+        else:
+            remaining = overall_budget - projected
+            status = "under"
+            status_text = f"On track — ৳{remaining:,.0f} under budget"
+    else:
+        status = "no_budget"
+        status_text = "No budget set"
+
+    vs_last_month = None
+    if prev_month_total and prev_month_total > 0:
+        diff = projected - prev_month_total
+        pct = (diff / prev_month_total) * 100
+        vs_last_month = {
+            "diff": round(diff, 2),
+            "pct": round(pct, 1),
+            "direction": "up" if diff > 0 else "down",
+        }
+
+    return jsonify({
+        "days_elapsed": today,
+        "days_in_month": days_in_month,
+        "spent_so_far": round(spent_so_far, 2),
+        "daily_avg": round(daily_avg, 2),
+        "projected": round(projected, 2),
+        "overall_budget": round(overall_budget, 2) if overall_budget else None,
+        "status": status,
+        "status_text": status_text,
+        "prev_month_total": round(prev_month_total, 2) if prev_month_total else None,
+        "vs_last_month": vs_last_month,
+    })
+
+
 # ── Audio transcription ────────────────────────────────────
 
 @app.route("/api/transcribe", methods=["POST"])
