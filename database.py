@@ -595,44 +595,6 @@ def get_all_expenses(limit=100, user_id=None):
     return [dict(row._mapping) for row in result]
 
 
-def get_recent_expenses_paginated(page=1, per_page=20, user_id=None, since=None):
-    conn = get_connection()
-    offset = (page - 1) * per_page
-    conditions = []
-    params = {}
-
-    if since:
-        conditions.append("date >= :since")
-        params["since"] = since
-    if user_id is not None:
-        conditions.append("user_id = :user_id")
-        params["user_id"] = user_id
-
-    where_clause = " WHERE " + " AND ".join(conditions) if conditions else ""
-
-    count_result = conn.execute(
-        text(f"SELECT COUNT(*) FROM expenses{where_clause}"),
-        params,
-    )
-    total = count_result.fetchone()[0]
-
-    result = conn.execute(
-        text(
-            f"SELECT * FROM expenses{where_clause} ORDER BY date DESC, created_at DESC LIMIT :lim OFFSET :off"
-        ),
-        {**params, "lim": per_page, "off": offset},
-    )
-    expenses = [dict(row._mapping) for row in result]
-
-    return {
-        "expenses": expenses,
-        "total": total,
-        "page": page,
-        "per_page": per_page,
-        "total_pages": max(1, (total + per_page - 1) // per_page),
-    }
-
-
 def get_expenses_by_month(year, month, user_id=None):
     conn = get_connection()
     month_pattern = f"{year}-{month:02d}%"

@@ -648,19 +648,11 @@ def api_change_password():
 @login_required
 def api_index():
     uid = session["user_id"]
-    is_super = session.get("role") == "superuser"
-    page = request.args.get("page", 1, type=int)
     today = datetime.now(TIMEZONE).strftime("%Y-%m-%d")
     today_expenses = db.get_expenses_by_date(today, user_id=uid)
     today_total = sum(e["amount"] for e in today_expenses)
     month_total = db.get_month_total(user_id=uid)
-    cutoff = (datetime.now(TIMEZONE) - timedelta(days=15)).strftime("%Y-%m-%d")
-    paginated = db.get_recent_expenses_paginated(
-        page=page, per_page=20, user_id=None if is_super else uid, since=cutoff
-    )
     for exp in today_expenses:
-        exp["color"] = CATEGORY_COLORS.get(exp["category"], "#6b7280")
-    for exp in paginated["expenses"]:
         exp["color"] = CATEGORY_COLORS.get(exp["category"], "#6b7280")
     budget_status = db.get_budget_status(uid)
     budget_alerts = [b for b in budget_status if b["percentage"] >= 80]
@@ -669,10 +661,6 @@ def api_index():
         "today_total": today_total,
         "month_total": month_total,
         "today_expenses": today_expenses,
-        "recent_expenses": paginated["expenses"],
-        "recent_page": paginated["page"],
-        "recent_total_pages": paginated["total_pages"],
-        "recent_total": paginated["total"],
         "category_colors": CATEGORY_COLORS,
         "budget_alerts": budget_alerts,
     })

@@ -492,10 +492,6 @@ async function renderHome(page = 1) {
     ? d.today_expenses.map(makeExpenseItem).join('')
     : '<div class="empty-state"><p>No expenses today. Add your first one!</p></div>';
 
-  const recentBody = d.recent_expenses.length
-    ? makeDateGroups(d.recent_expenses)
-    : '<div class="empty-state"><p>No expenses yet. Start tracking!</p></div>';
-
   app.innerHTML = `
     <div class="stats-grid">
       <div class="stat-card">
@@ -563,15 +559,7 @@ async function renderHome(page = 1) {
         <div id="todayExpenses" class="expense-list">${todayHtml}</div>
       </div>
     </div>
-
-    <div class="card recent-card">
-      <div class="card-header-row">
-        <h2 class="card-title" style="margin-bottom:0;">Recent Activity</h2>
-        <span class="expense-count">${d.recent_total} expense(s)</span>
-      </div>
-      <div class="expense-list">${recentBody}</div>
-      ${makePagination('/?', d.recent_page, d.recent_total_pages)}
-    </div>`;
+`;
 
   attachExpenseForm(d.today);
   initChatCard();
