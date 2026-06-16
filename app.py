@@ -777,6 +777,33 @@ def api_learn():
 
 # ── Shared Q&A Pipeline ──────────────────────────────────
 
+def _normalize_question(text):
+    """Normalize shorthand comparison queries to match SQL_PROMPT examples."""
+    if re.search(r'\bhow\s+does\s+this\s+month\s+compare\b', text, re.IGNORECASE):
+        return text
+    text = re.sub(
+        r'\bcompare\s+(?:to|with)\s+last\s+month\b',
+        'How does this month compare to last month',
+        text, flags=re.IGNORECASE,
+    )
+    text = re.sub(
+        r'\bcompare\s+(?:to|with)\s+previous\s+month\b',
+        'How does this month compare to last month',
+        text, flags=re.IGNORECASE,
+    )
+    text = re.sub(
+        r'\bthis\s+month\s+vs\.?\s+last\s+month\b',
+        'How does this month compare to last month',
+        text, flags=re.IGNORECASE,
+    )
+    text = re.sub(
+        r'\bmonth\s+over\s+month\b',
+        'How does this month compare to last month',
+        text, flags=re.IGNORECASE,
+    )
+    return text
+
+
 def _run_qa_pipeline(question, question_with_context, schema, history, uid, force_programmatic=False):
     """Run a single question through SQL pipeline: cache→generate→validate→execute→format.
     Returns dict with answer/sql/data/columns, or dict with error key."""
@@ -907,6 +934,8 @@ def api_ask():
     question = data.get("question", "").strip()
     if not question:
         return jsonify({"error": "Question required"}), 400
+
+    question = _normalize_question(question)
 
     history = data.get("history", [])
 
@@ -1073,6 +1102,8 @@ def api_chat():
 
     if len(message) < 2:
         return jsonify({"error": "Message required"}), 400
+
+    message = _normalize_question(message)
 
     learned = db.get_learned_categories(session["user_id"])
 
