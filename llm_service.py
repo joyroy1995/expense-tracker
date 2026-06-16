@@ -688,6 +688,13 @@ def extract_date_reference(text, now):
     today = now.date() if hasattr(now, 'date') else now
     cleaned = original
 
+    # ── Comparison queries: don't extract month as a single date ──
+    if re.search(
+        r'\b(?:compare|comparison|vs\.?|versus|difference\s+between|month\s+over\s+month)\b',
+        cleaned, re.IGNORECASE,
+    ):
+        return original, ""
+
     month_map = {
         'january':1,'february':2,'march':3,'april':4,'may':5,'june':6,
         'july':7,'august':8,'september':9,'october':10,'november':11,'december':12,
