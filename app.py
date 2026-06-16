@@ -447,6 +447,8 @@ def _fix_description_filter(sql, question):
     q = question.lower()
     if re.search(r"description\s+LIKE", sql, re.IGNORECASE):
         return sql
+    if re.search(r"category\s*=", sql, re.IGNORECASE):
+        return sql
     keyword = _extract_item_keyword(q)
     if not keyword or len(keyword) < 2 or keyword in [c.lower() for c in _ALL_CATEGORIES] or keyword.endswith('est'):
         return sql
