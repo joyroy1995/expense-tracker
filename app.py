@@ -1520,6 +1520,86 @@ def api_budget_status():
     return jsonify({"budget_status": status})
 
 
+# ── Recurring Transactions ─────────────────────────────────
+
+@app.route("/api/recurring", methods=["GET", "POST"])
+@login_required
+def api_recurring():
+    uid = session["user_id"]
+    if request.method == "GET":
+        transactions = db.get_recurring_transactions(uid)
+        for t in transactions:
+            t["color"] = CATEGORY_COLORS.get(t["category"], "#6b7280")
+        return jsonify({"transactions": transactions})
+
+    data = request.get_json()
+    description = data.get("description", "").strip()
+    amount = data.get("amount")
+    category = data.get("category", "").strip()
+    frequency = data.get("frequency", "monthly")
+    next_date = data.get("next_date")
+    end_date = data.get("end_date") or None
+    interval_value = data.get("interval_value", 1)
+    interval_unit = data.get("interval_unit")
+
+    if not description:
+        return jsonify({"error": "Description required"}), 400
+    if not category:
+        return jsonify({"error": "Category required"}), 400
+    if not isinstance(amount, (int, float)) or amount <= 0:
+        return jsonify({"error": "Amount must be positive"}), 400
+    if not next_date:
+        return jsonify({"error": "Next date required"}), 400
+
+    rec_id = db.add_recurring(uid, description, amount, category, frequency, next_date, end_date, interval_value, interval_unit)
+    return jsonify({"success": True, "id": rec_id})
+
+
+@app.route("/api/recurring/<int:rec_id>", methods=["PUT"])
+@login_required
+def api_update_recurring(rec_id):
+    data = request.get_json()
+    allowed = ["description", "amount", "category", "frequency", "interval_value", "interval_unit", "next_date", "end_date", "is_active"]
+    kwargs = {k: data[k] for k in allowed if k in data}
+    db.update_recurring(rec_id, **kwargs)
+    return jsonify({"success": True})
+
+
+@app.route("/api/recurring/<int:rec_id>", methods=["DELETE"])
+@login_required
+def api_delete_recurring(rec_id):
+    db.delete_recurring(rec_id)
+    return jsonify({"success": True})
+
+
+@app.route("/api/recurring/process", methods=["POST"])
+@login_required
+def api_process_recurring():
+    uid = session["user_id"]
+    due = db.get_due_recurring(uid)
+    created = []
+    for rec in due:
+        exp_id = db.add_expense(rec["next_date"], rec["description"], rec["amount"], rec["category"], user_id=uid)
+        next_date = db.compute_next_date(rec["next_date"], rec["frequency"], rec["interval_value"], rec["interval_unit"])
+        db.update_next_date(rec["id"], next_date)
+        created.append({"id": exp_id, "description": rec["description"], "amount": rec["amount"]})
+    return jsonify({"processed": len(created), "expenses": created})
+
+
+# ── Calendar: daily totals ─────────────────────────────────
+
+@app.route("/api/expenses/daily-totals")
+@login_required
+def api_daily_totals():
+    uid = session["user_id"]
+    now = datetime.now(TIMEZONE)
+    year = request.args.get("year", now.year, type=int)
+    month = request.args.get("month", now.month, type=int)
+    totals = db.get_daily_totals(year, month, user_id=uid)
+    totals_map = {row["date"]: row["total"] for row in totals}
+    return jsonify({"totals": totals_map, "year": year, "month": month})
+
+
 # ── Audio transcription ────────────────────────────────────
 
 @app.route("/api/transcribe", methods=["POST"])

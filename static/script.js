@@ -43,6 +43,18 @@ const api = {
       return { ok: true, data };
     } catch { return { ok: false, error: 'Network error' }; }
   },
+  async put(url, body) {
+    try {
+      const res = await fetch(url, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json();
+      if (!res.ok) return { ok: false, error: data.error || 'Request failed' };
+      return { ok: true, data };
+    } catch { return { ok: false, error: 'Network error' }; }
+  },
 };
 
 // ── Router ──
@@ -63,6 +75,8 @@ function getRoute() {
     '/dashboard': 'dashboard',
     '/profile': 'profile',
     '/budgets': 'budgets',
+    '/calendar': 'calendar',
+    '/recurring': 'recurring',
     '/admin/users': 'admin-users',
   };
   return { view: routes[path] || 'home', params: p };
@@ -487,6 +501,13 @@ async function renderHome(page = 1) {
   if (!res.ok) { handleAuthError(res); return; }
   const d = res.data;
   window.categoryColors = d.category_colors;
+
+  // Auto-process due recurring transactions
+  api.post('/api/recurring/process').then(pRes => {
+    if (pRes.ok && pRes.data.processed > 0) {
+      showToast(`🔄 Created ${pRes.data.processed} recurring expense(s)`, 'success');
+    }
+  });
 
   const todayHtml = d.today_expenses.length
     ? d.today_expenses.map(makeExpenseItem).join('')
@@ -2275,9 +2296,325 @@ async function renderRoute() {
     case 'dashboard': renderDashboard(params || {}); break;
     case 'budgets': renderBudgets(); break;
     case 'profile': renderProfile(); break;
+    case 'calendar': renderCalendar(); break;
+    case 'recurring': renderRecurringTransactions(); break;
     case 'admin-users': renderAdminUsers(); break;
     default: renderHome(1);
   }
+}
+
+// ── Calendar Heatmap ─────────────────────────────────────
+
+async function renderCalendar() {
+  setLayout('app');
+  document.title = 'Calendar - Expense Tracker';
+  const app = document.getElementById('app');
+  const now = new Date();
+  let year = now.getFullYear();
+  let month = now.getMonth() + 1;
+
+  async function loadCalendar() {
+    app.innerHTML = '<div class="page-loader"><div class="spinner-lg"></div></div>';
+    const totalsRes = await api.get(`/api/expenses/daily-totals?year=${year}&month=${month}`);
+    if (!totalsRes.ok) { handleAuthError(totalsRes); return; }
+    const totalsMap = totalsRes.data.totals || {};
+
+    const daysInMonth = new Date(year, month, 0).getDate();
+    const firstDay = new Date(year, month - 1, 1).getDay();
+    const monthNames = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+    const dayHeaders = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+
+    const values = Object.values(totalsMap).filter(v => v > 0);
+    const maxVal = values.length ? Math.max(...values) : 0;
+
+    function getTier(total) {
+      if (total === 0) return 0;
+      if (maxVal === 0) return 0;
+      const pct = total / maxVal;
+      if (pct <= 0.25) return 1;
+      if (pct <= 0.5) return 2;
+      if (pct <= 0.75) return 3;
+      return 4;
+    }
+
+    let cells = '';
+    for (let i = 0; i < firstDay; i++) {
+      cells += '<div class="cal-day cal-day-empty"></div>';
+    }
+    for (let d = 1; d <= daysInMonth; d++) {
+      const dateStr = `${year}-${String(month).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+      const total = totalsMap[dateStr] || 0;
+      const tier = getTier(total);
+      const amtStr = total > 0 ? `৳${Number(total).toFixed(0)}` : '';
+      cells += `<div class="cal-day cal-tier-${tier}" data-date="${dateStr}" title="${dateStr}${total > 0 ? ` - ${amtStr}` : ' - No expenses'}" onclick="selectCalendarDay('${dateStr}')">
+        <span class="cal-day-num">${d}</span>
+        ${total > 0 ? `<span class="cal-day-amt">${amtStr}</span>` : ''}
+      </div>`;
+    }
+
+    const todayStr = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}`;
+
+    app.innerHTML = `
+      <div class="cal-page">
+        <div class="cal-header">
+          <button class="cal-nav-btn" onclick="calendarNav(${year}, ${month}, -1)">◀</button>
+          <h2 class="cal-title">${monthNames[month-1]} ${year}</h2>
+          <button class="cal-nav-btn" onclick="calendarNav(${year}, ${month}, 1)">▶</button>
+          <button class="cal-today-btn" onclick="calendarToday()">Today</button>
+        </div>
+        <div class="cal-heatmap">
+          <div class="cal-weekdays">
+            ${dayHeaders.map(h => `<div class="cal-weekday">${h}</div>`).join('')}
+          </div>
+          <div class="cal-grid">
+            ${cells}
+          </div>
+        </div>
+        <div class="cal-legend">
+          <span class="cal-legend-label">Less</span>
+          <span class="cal-legend-swatch cal-tier-0"></span>
+          <span class="cal-legend-swatch cal-tier-1"></span>
+          <span class="cal-legend-swatch cal-tier-2"></span>
+          <span class="cal-legend-swatch cal-tier-3"></span>
+          <span class="cal-legend-swatch cal-tier-4"></span>
+          <span class="cal-legend-label">More</span>
+        </div>
+        <div id="calExpenses" class="cal-expenses"></div>
+      </div>`;
+
+    if (todayStr.startsWith(`${year}-${String(month).padStart(2,'0')}`)) {
+      selectCalendarDay(todayStr);
+    }
+  }
+
+  window.calendarNav = function(y, m, dir) {
+    m += dir;
+    if (m < 1) { m = 12; y--; }
+    if (m > 12) { m = 1; y++; }
+    year = y; month = m;
+    loadCalendar();
+  };
+
+  window.calendarToday = function() {
+    year = now.getFullYear();
+    month = now.getMonth() + 1;
+    loadCalendar();
+  };
+
+  window.selectCalendarDay = async function(dateStr) {
+    document.querySelectorAll('.cal-day.selected').forEach(el => el.classList.remove('selected'));
+    const dayEl = document.querySelector(`.cal-day[data-date="${dateStr}"]`);
+    if (dayEl) dayEl.classList.add('selected');
+
+    const el = document.getElementById('calExpenses');
+    if (!el) return;
+    el.innerHTML = '<div class="page-loader"><div class="spinner-lg"></div></div>';
+    const res = await api.get(`/api/expenses/${dateStr}`);
+    if (!res.ok) { el.innerHTML = ''; return; }
+    const expenses = res.data;
+    if (!expenses.length) {
+      el.innerHTML = `<div class="cal-expenses-header"><h3>${dateStr}</h3><span class="expense-count">No expenses</span></div>`;
+      return;
+    }
+    const total = expenses.reduce((s, e) => s + e.amount, 0);
+    el.innerHTML = `
+      <div class="cal-expenses-header"><h3>${dateStr}</h3><span class="expense-count">৳${total.toFixed(2)}</span></div>
+      <div class="expense-list">${expenses.map(makeExpenseItem).join('')}</div>`;
+  };
+
+  loadCalendar();
+}
+
+// ── Recurring Transactions ───────────────────────────────
+
+async function renderRecurringTransactions() {
+  setLayout('app');
+  document.title = 'Recurring - Expense Tracker';
+  const app = document.getElementById('app');
+  app.innerHTML = '<div class="page-loader"><div class="spinner-lg"></div></div>';
+
+  const [recRes, catRes] = await Promise.all([
+    api.get('/api/recurring'),
+    api.get('/api/categories'),
+  ]);
+  if (!recRes.ok) { handleAuthError(recRes); return; }
+
+  const transactions = recRes.data.transactions || [];
+  const categories = catRes.ok ? (catRes.data.categories || Object.keys(catRes.data.colors || {})) : [];
+  const frequencies = ['daily', 'weekly', 'monthly', 'yearly'];
+  let editingId = null;
+
+  window.saveRecurring = async function() {
+    const desc = document.getElementById('recDesc')?.value.trim();
+    const amt = parseFloat(document.getElementById('recAmount')?.value);
+    const cat = document.getElementById('recCategory')?.value;
+    const freq = document.getElementById('recFrequency')?.value;
+    const nd = document.getElementById('recNextDate')?.value;
+    const ed = document.getElementById('recEndDate')?.value || null;
+    if (!desc || !amt || !cat || !nd) { showToast('Fill in all required fields', 'error'); return; }
+
+    const body = { description: desc, amount: amt, category: cat, frequency: freq, next_date: nd };
+    if (ed) body.end_date = ed;
+
+    let res;
+    if (editingId) {
+      body.is_active = true;
+      res = await api.put(`/api/recurring/${editingId}`, body);
+    } else {
+      res = await api.post('/api/recurring', body);
+    }
+    if (!res.ok) { showToast(res.error || 'Error saving', 'error'); return; }
+    showToast(editingId ? 'Updated!' : 'Added!', 'success');
+    editingId = null;
+    renderRecurringTransactions();
+  };
+
+  window.editRecurring = function(id) {
+    const rec = transactions.find(t => t.id === id);
+    if (!rec) return;
+    editingId = id;
+    const el = document.getElementById('recDesc'); if (el) el.value = rec.description;
+    const amt = document.getElementById('recAmount'); if (amt) amt.value = rec.amount;
+    const cat = document.getElementById('recCategory'); if (cat) cat.value = rec.category;
+    const freq = document.getElementById('recFrequency'); if (freq) freq.value = rec.frequency;
+    const nd = document.getElementById('recNextDate'); if (nd) nd.value = rec.next_date;
+    const ed = document.getElementById('recEndDate'); if (ed) ed.value = rec.end_date || '';
+    const btn = document.getElementById('recSaveBtn');
+    if (btn) btn.textContent = 'Update';
+    const cancel = document.getElementById('recCancelBtn');
+    if (cancel) cancel.style.display = 'inline-block';
+    document.getElementById('recForm')?.scrollIntoView({ behavior: 'smooth' });
+  };
+
+  window.cancelEditRecurring = function() {
+    editingId = null;
+    const form = document.getElementById('recForm');
+    if (form) form.reset();
+    const btn = document.getElementById('recSaveBtn');
+    if (btn) btn.textContent = 'Add';
+    const cancel = document.getElementById('recCancelBtn');
+    if (cancel) cancel.style.display = 'none';
+  };
+
+  window.deleteRecurring = async function(id) {
+    if (!confirm('Delete this recurring transaction?')) return;
+    const res = await api.del(`/api/recurring/${id}`);
+    if (!res.ok) { showToast('Error deleting', 'error'); return; }
+    showToast('Deleted!', 'success');
+    renderRecurringTransactions();
+  };
+
+  window.toggleRecurring = async function(id, checked) {
+    const res = await api.put(`/api/recurring/${id}`, { is_active: checked ? 1 : 0 });
+    if (!res.ok) { showToast('Error toggling', 'error'); return; }
+  };
+
+  window.processDueRecurring = async function() {
+    const btn = document.getElementById('processDueBtn');
+    if (btn) { btn.disabled = true; btn.textContent = 'Processing...'; }
+    const res = await api.post('/api/recurring/process');
+    if (btn) { btn.disabled = false; btn.textContent = 'Process Due'; }
+    if (!res.ok) { showToast('Error processing', 'error'); return; }
+    const count = res.data.processed || 0;
+    if (count > 0) {
+      showToast(`Created ${count} expense(s)!`, 'success');
+      renderRecurringTransactions();
+    } else {
+      showToast('No due transactions', 'info');
+    }
+  };
+
+  const today = new Date().toISOString().split('T')[0];
+  const monthNames = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  const freqLabels = { daily: 'Daily', weekly: 'Weekly', monthly: 'Monthly', yearly: 'Yearly' };
+
+  const listHtml = transactions.length
+    ? transactions.map(t => {
+        const isOverdue = t.is_active && t.next_date < today;
+        return `
+          <div class="rec-card ${!t.is_active ? 'rec-inactive' : ''}">
+            <div class="rec-card-top">
+              <div class="rec-card-info">
+                <div class="rec-desc">${esc(t.description)}</div>
+                <div class="rec-meta">
+                  <span class="rec-amount">৳${Number(t.amount).toFixed(2)}</span>
+                  <span class="category-badge" style="background:${t.color}">${esc(t.category)}</span>
+                  <span class="rec-freq">${freqLabels[t.frequency] || t.frequency}</span>
+                </div>
+              </div>
+              <button class="btn-delete" onclick="deleteRecurring(${t.id})">&times;</button>
+            </div>
+            <div class="rec-card-bottom">
+              <span class="rec-next ${isOverdue ? 'rec-overdue' : ''}">Next: ${t.next_date}${isOverdue ? ' ⚠' : ''}</span>
+              <label class="rec-toggle">
+                <input type="checkbox" ${t.is_active ? 'checked' : ''} onchange="toggleRecurring(${t.id}, this.checked)">
+                <span class="rec-toggle-slider"></span>
+              </label>
+              <button class="rec-edit-btn" onclick="editRecurring(${t.id})">✎</button>
+            </div>
+          </div>`;
+      }).join('')
+    : '<div class="empty-state"><p>No recurring transactions yet.</p></div>';
+
+  app.innerHTML = `
+    <div class="rec-page">
+      <div class="rec-page-header">
+        <h1>Recurring Transactions</h1>
+        <button id="processDueBtn" class="btn btn-primary" onclick="processDueRecurring()">Process Due</button>
+      </div>
+
+      <div class="card rec-form-card" id="recForm">
+        <h2 class="card-title" id="recFormTitle">Add Recurring</h2>
+        <div class="rec-form">
+          <div class="form-row">
+            <div class="form-group form-desc">
+              <label for="recDesc">Description</label>
+              <input type="text" id="recDesc" placeholder="e.g. House Rent" autocomplete="off">
+            </div>
+            <div class="form-group form-amount">
+              <label for="recAmount">Amount (৳)</label>
+              <input type="number" id="recAmount" step="0.01" min="0" placeholder="0.00">
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label for="recCategory">Category</label>
+              <select id="recCategory">
+                ${categories.map(c => `<option value="${c}">${c}</option>`).join('')}
+              </select>
+            </div>
+            <div class="form-group">
+              <label for="recFrequency">Frequency</label>
+              <select id="recFrequency">
+                ${frequencies.map(f => `<option value="${f}">${f.charAt(0).toUpperCase() + f.slice(1)}</option>`).join('')}
+              </select>
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label for="recNextDate">Start / Next Date</label>
+              <input type="date" id="recNextDate" value="${today}">
+            </div>
+            <div class="form-group">
+              <label for="recEndDate">End Date (optional)</label>
+              <input type="date" id="recEndDate">
+            </div>
+          </div>
+          <div class="form-actions">
+            <button id="recSaveBtn" class="btn btn-primary" onclick="saveRecurring()">Add</button>
+            <button id="recCancelBtn" class="btn btn-outline" onclick="cancelEditRecurring()" style="display:none">Cancel</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-header-row">
+          <h2 class="card-title">Your Transactions</h2>
+          <span class="expense-count">${transactions.length} transaction(s)</span>
+        </div>
+        <div class="rec-list">${listHtml}</div>
+      </div>
+    </div>`;
 }
 
 document.addEventListener('DOMContentLoaded', init);
