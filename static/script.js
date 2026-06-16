@@ -962,11 +962,26 @@ async function renderDashboard(params) {
       ? Math.min((fc.projected / fc.overall_budget) * 100, 100) : 0;
     const dayPct = (fc.days_elapsed / fc.days_in_month) * 100;
 
+    // AI insights
+    const ai = fc.ai || {};
+    const confDot = ai.confidence === 'high' ? '🟢' : ai.confidence === 'medium' ? '🟡' : '🔴';
+    const confLabel = ai.confidence === 'high' ? 'High' : ai.confidence === 'medium' ? 'Medium' : 'Low';
+    const rangeHtml = (ai.best_case != null && ai.worst_case != null)
+      ? `<div class="forecast-range">Range: ৳${Number(ai.worst_case).toLocaleString()} – ৳${Number(ai.best_case).toLocaleString()}</div>`
+      : '';
+    const reasoningHtml = ai.reasoning
+      ? `<div class="forecast-reasoning">💡 ${esc(ai.reasoning)}</div>`
+      : '';
+    const notesHtml = ai.notes
+      ? `<div class="forecast-notes">${esc(ai.notes)}</div>`
+      : '';
+
     forecastHtml = `
       <div class="card forecast-card">
         <div class="forecast-header">
           <h2 class="card-title">📈 Spending Forecast</h2>
           ${vsMonthHtml}
+          <span class="forecast-confidence forecast-confidence-${ai.confidence || 'low'}">${confDot} ${confLabel}</span>
         </div>
         <div class="forecast-grid">
           <div class="forecast-metric">
@@ -986,6 +1001,7 @@ async function renderDashboard(params) {
             <div class="forecast-label">Budget</div>
           </div>
         </div>
+        ${rangeHtml}
         ${fc.overall_budget ? `
         <div class="forecast-progress">
           <div class="forecast-bar-track">
@@ -1001,6 +1017,8 @@ async function renderDashboard(params) {
           <span>${statusIcon[fc.status] || '📊'}</span>
           <span>${esc(fc.status_text)}</span>
         </div>
+        ${reasoningHtml}
+        ${notesHtml}
         ${fc.status === 'no_budget' ? `<a href="/budgets" data-link class="forecast-set-budget">Set a budget →</a>` : ''}
       </div>`;
   }

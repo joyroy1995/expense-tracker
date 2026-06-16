@@ -6,7 +6,7 @@ import re
 import random
 import calendar
 import database as db
-from llm_service import extract_expense, predict_expense, extract_keywords, generate_sql, correct_sql, answer_from_results, format_answer, split_expenses, _clean_split_desc, extract_date_reference, clean_date_refs, detect_budget_intent, is_question, transcribe_audio, decompose_question, compose_answers
+from llm_service import extract_expense, predict_expense, extract_keywords, generate_sql, correct_sql, answer_from_results, format_answer, split_expenses, _clean_split_desc, extract_date_reference, clean_date_refs, detect_budget_intent, is_question, transcribe_audio, decompose_question, compose_answers, generate_forecast
 from database import _ALL_CATEGORIES
 from config import USERNAME, PASSWORD, SECRET_KEY, CATEGORY_COLORS, TIMEZONE, SEED_CATEGORIES
 
@@ -1615,22 +1615,86 @@ def api_forecast():
     daily_totals = db.get_daily_totals(year, month, user_id=uid)
     spent_so_far = sum(d["total"] for d in daily_totals)
     daily_avg = spent_so_far / today if today > 0 else 0
-    projected = daily_avg * days_in_month
+    linear_projected = daily_avg * days_in_month
 
     monthly_totals = db.get_monthly_totals(3, user_id=uid)
     current_month_str = f"{year}-{month:02d}"
     prev_month_total = None
+    two_months_ago_total = None
     for mt in monthly_totals:
         if mt["month"] < current_month_str:
-            prev_month_total = mt["total"]
-            break
+            if prev_month_total is None:
+                prev_month_total = mt["total"]
+            elif two_months_ago_total is None:
+                two_months_ago_total = mt["total"]
+                break
 
+    category_breakdown = db.get_category_totals_by_month(year, month, user_id=uid)
     budget_status = db.get_budget_status(uid)
     overall_budget = None
     for b in budget_status:
         if b["category"] == "__overall__":
             overall_budget = b["budget_amount"]
             break
+
+    # ── AI forecast ──
+    prev_year, prev_month = (year - 1, 12) if month == 1 else (year, month - 1)
+    prev_month_daily_totals = db.get_daily_totals(prev_year, prev_month, user_id=uid)
+
+    # Detect known fixed monthly expenses
+    known_monthly_expenses = {"pending": [], "recorded": []}
+    if prev_month_total:
+        last_month_expenses = db.get_expenses_by_month(prev_year, prev_month, user_id=uid)
+        from collections import Counter
+        desc_counts = Counter()
+        last_month_by_desc = {}
+        for e in last_month_expenses:
+            key = e["description"].strip().lower()
+            desc_counts[key] += 1
+            if key not in last_month_by_desc:
+                last_month_by_desc[key] = {"description": e["description"], "category": e["category"], "amount": e["amount"]}
+
+        current_month_expenses = db.get_expenses_by_month(year, month, user_id=uid)
+        recorded_descs = set(e["description"].strip().lower() for e in current_month_expenses)
+
+        for desc_key, info in last_month_by_desc.items():
+            if desc_counts[desc_key] > 1:
+                continue
+            entry = {"description": info["description"], "category": info["category"], "amount": info["amount"]}
+            if desc_key in recorded_descs:
+                known_monthly_expenses["recorded"].append(entry)
+            else:
+                known_monthly_expenses["pending"].append(entry)
+
+    ai_data = {
+        "days_elapsed": today,
+        "days_in_month": days_in_month,
+        "spent_so_far": spent_so_far,
+        "current_daily_totals": daily_totals,
+        "prev_month_daily_totals": prev_month_daily_totals,
+        "prev_month_total": prev_month_total,
+        "two_months_ago_total": two_months_ago_total,
+        "category_breakdown": category_breakdown,
+        "overall_budget": overall_budget,
+        "known_monthly_expenses": known_monthly_expenses,
+    }
+    ai_forecast = generate_forecast(ai_data)
+
+    # Use AI projection if valid, otherwise fall back to linear
+    if ai_forecast and isinstance(ai_forecast.get("projected"), (int, float)) and ai_forecast["projected"] > 0:
+        projected = ai_forecast["projected"]
+        confidence = ai_forecast.get("confidence", "medium")
+        reasoning = ai_forecast.get("reasoning", "")
+        best_case = ai_forecast.get("best_case")
+        worst_case = ai_forecast.get("worst_case")
+        notes = ai_forecast.get("notes", "")
+    else:
+        projected = linear_projected
+        confidence = "low"
+        reasoning = ""
+        best_case = None
+        worst_case = None
+        notes = "Based on simple average (AI unavailable)"
 
     if overall_budget and overall_budget > 0:
         pct_of_budget = (projected / overall_budget) * 100
@@ -1669,6 +1733,13 @@ def api_forecast():
         "status_text": status_text,
         "prev_month_total": round(prev_month_total, 2) if prev_month_total else None,
         "vs_last_month": vs_last_month,
+        "ai": {
+            "confidence": confidence,
+            "reasoning": reasoning,
+            "best_case": round(best_case, 2) if best_case else None,
+            "worst_case": round(worst_case, 2) if worst_case else None,
+            "notes": notes,
+        },
     })
 
 
