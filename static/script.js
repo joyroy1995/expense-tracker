@@ -966,8 +966,10 @@ async function renderDashboard(params) {
     const ai = fc.ai || {};
     const confDot = ai.confidence === 'high' ? '🟢' : ai.confidence === 'medium' ? '🟡' : '🔴';
     const confLabel = ai.confidence === 'high' ? 'High' : ai.confidence === 'medium' ? 'Medium' : 'Low';
-    const rangeHtml = (ai.best_case != null && ai.worst_case != null)
-      ? `<div class="forecast-range">Range: ৳${Number(ai.worst_case).toLocaleString()} – ৳${Number(ai.best_case).toLocaleString()}</div>`
+    const rangeLow = ai.best_case != null && ai.worst_case != null ? Math.min(ai.best_case, ai.worst_case) : null;
+    const rangeHigh = ai.best_case != null && ai.worst_case != null ? Math.max(ai.best_case, ai.worst_case) : null;
+    const rangeHtml = (rangeLow != null && rangeHigh != null && rangeLow !== rangeHigh)
+      ? `<div class="forecast-range">Range: ৳${Number(rangeLow).toLocaleString()} – ৳${Number(rangeHigh).toLocaleString()}</div>`
       : '';
     const reasoningHtml = ai.reasoning
       ? `<div class="forecast-reasoning">💡 ${esc(ai.reasoning)}</div>`

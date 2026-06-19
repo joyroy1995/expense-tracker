@@ -1192,6 +1192,12 @@ Known fixed monthly expenses from last month:
 {overall_budget_line}
 {status_line}
 
+Guidance for best_case vs worst_case:
+- best_case: optimistic estimate (lowest projected total — assumes frugal remaining days)
+- worst_case: pessimistic estimate (highest projected total — assumes higher remaining spending)
+- best_case MUST be strictly less than worst_case to show a meaningful range
+- If spending is very stable, use a 5-10% spread between best_case and worst_case
+
 Return ONLY valid JSON with this exact structure:
 {{
   "projected": <number>,

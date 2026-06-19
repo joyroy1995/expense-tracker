@@ -301,7 +301,7 @@ def _fix_category_breakdown_sql(sql, question):
     """Convert plain list SQL to category breakdown when question asks for
     breakdown by category (LLM may generate a flat list instead)."""
     q = question.lower()
-    if not re.search(r'\b(?:breakdown\s+by\s+category|category\s+breakdown|by\s+category|which\s+category|spend\s+the\s+most\s+on|spent\s+the\s+most\s+on)\b', q):
+    if not re.search(r'\b(?:breakdown\s+by\s+category|category\s+breakdown|by\s+category|which\s+category|spend\s+the\s+most\s+on|spent\s+the\s+most\s+on|category\s+wise|per\s+category|group\s+by\s+category|top\s+\d+\s+categor(?:y|ies)\s+by|categories?\s+by\s+spending)\b', q):
         return sql
     if re.search(r'\bGROUP\s+BY\b', sql, re.IGNORECASE):
         return sql
