@@ -1573,7 +1573,19 @@ async function adminTriggerDigest() {
     result.innerHTML = `<div class="alert alert-error">${esc(res.error)}</div>`;
     return;
   }
-  result.innerHTML = `<div class="alert alert-success">Digest sent to ${res.data.sent} user(s)</div>`;
+  const d = res.data;
+  let details = `<div class="alert alert-success">Digest sent to <strong>${d.sent}</strong> user(s)</div>`;
+  if (d.failed > 0) {
+    details += `<div class="alert alert-warning">${d.failed} user(s) had no subscriptions</div>`;
+  }
+  if (d.vapid_loaded === false || d.webpush_available === false) {
+    details += `<div class="alert alert-error">Push system not healthy: VAPID loaded=${d.vapid_loaded}, webpush=${d.webpush_available}</div>`;
+  }
+  if (d.subscribed === 0) {
+    details += `<div class="alert alert-warning">No users have push subscriptions. Users need to visit the site and grant notification permission.</div>`;
+  }
+  details += `<p class="text-muted" style="font-size:13px;margin-top:8px;">Subscribed users: ${d.subscribed} | VAPID: ${d.vapid_loaded ? '✅' : '❌'} | WebPush: ${d.webpush_available ? '✅' : '❌'}</p>`;
+  result.innerHTML = details;
 }
 
 // ── Auth Error ──
@@ -2377,10 +2389,6 @@ function sendSuggestion(text) {
 // ── Init ──
 
 async function init() {
-  // Register SW early for push support (browser compares bytewise, no-op if same)
-  if ("serviceWorker" in navigator) {
-    navigator.serviceWorker.register('/sw.js').catch(() => {});
-  }
   const me = await api.get('/api/me');
   if (me.ok) {
     currentUser = me.data;
@@ -2410,10 +2418,7 @@ async function subscribeToPush() {
     if (permission !== "granted") return;
   }
   try {
-    let registration = await navigator.serviceWorker.getRegistration();
-    if (!registration) {
-      registration = await navigator.serviceWorker.register('/sw.js');
-    }
+    const registration = await navigator.serviceWorker.register('/sw.js');
     // Wait for SW to be active before subscribing
     if (registration.installing) {
       await new Promise((resolve, reject) => {
@@ -2432,17 +2437,25 @@ async function subscribeToPush() {
     }
     const keyRes = await api.get("/api/notifications/vapid-public-key");
     if (!keyRes.ok || !keyRes.data?.publicKey) return;
+    // Unsubscribe existing subscription first to avoid reusing stale endpoints
+    const existingSub = await registration.pushManager.getSubscription();
+    if (existingSub) {
+      await existingSub.unsubscribe();
+    }
     const subscription = await registration.pushManager.subscribe({
       userVisibleOnly: true,
       applicationServerKey: urlB64ToUint8Array(keyRes.data.publicKey),
     });
     const key = subscription.toJSON();
-    await api.post("/api/notifications/subscribe", {
+    const subRes = await api.post("/api/notifications/subscribe", {
       endpoint: key.endpoint,
       keys: { p256dh: key.keys.p256dh, auth: key.keys.auth },
     });
+    if (!subRes.ok) {
+      console.error('[push] Failed to save subscription on server:', subRes.error);
+    }
   } catch (e) {
-    // Subscription likely already exists — that's fine
+    console.error('[push] subscribeToPush failed:', e);
   }
 }
 

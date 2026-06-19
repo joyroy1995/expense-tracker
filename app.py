@@ -796,8 +796,12 @@ def api_admin_delete_user(user_id):
 @superuser_required
 def api_admin_trigger_digest():
     users = db.get_all_push_subscriptions()
-    user_ids = set(u["user_id"] for u in users)
+    user_ids = sorted(set(u["user_id"] for u in users))
+    user_sub_count = {uid: 0 for uid in user_ids}
+    for sub in users:
+        user_sub_count[sub["user_id"]] += 1
     sent = 0
+    failed_endpoints = 0
     for uid in user_ids:
         yesterday = (datetime.now(TIMEZONE) - timedelta(days=1)).strftime("%Y-%m-%d")
         month = datetime.now(TIMEZONE).strftime("%Y-%m")
@@ -816,17 +820,20 @@ def api_admin_trigger_digest():
         if yesterday_total > 0:
             body_parts.append(f"Yesterday: ৳{yesterday_total:,.0f}")
         body_parts.append(f"Month to date: ৳{month_total:,.0f}")
-        ok = send_push_notification(
+        ok_count = send_push_notification(
             user_id=uid,
             title="📊 Daily Summary",
             body=" | ".join(body_parts),
             tag="daily-digest",
             data={"type": "daily_digest"},
         )
-        if ok:
+        if ok_count:
             sent += 1
+        else:
+            failed_endpoints += 1
     return jsonify({
         "sent": sent,
+        "failed": failed_endpoints,
         "subscribed": len(user_ids),
         "vapid_loaded": _vapid_instance is not None,
         "webpush_available": _pywebpush_available,
@@ -1699,6 +1706,7 @@ def api_daily_totals():
 _vapid_instance = None
 _pywebpush_available = None
 _vapid_public_key_cache = None
+_webpush_func = None  # cached reference to pywebpush.webpush
 
 def _load_vapid():
     global _vapid_instance, _vapid_public_key_cache
@@ -1730,25 +1738,26 @@ def _load_vapid():
 
 def send_push_notification(user_id, title, body, icon=None, tag=None, data=None):
     """Send push notification to all subscriptions of a user.
-    Returns True if at least one push was attempted, False otherwise."""
+    Returns number of successful sends."""
     if not VAPID_PRIVATE_KEY or not VAPID_CLAIM_EMAIL:
-        return False
-    global _pywebpush_available
+        return 0
+    global _pywebpush_available, _webpush_func
     if _pywebpush_available is None:
         try:
             from pywebpush import webpush
+            _webpush_func = webpush
             _pywebpush_available = True
         except ImportError:
             _pywebpush_available = False
-            return False
-    if not _pywebpush_available:
-        return False
+            return 0
+    if not _pywebpush_available or _webpush_func is None:
+        return 0
     vapid_key, _ = _load_vapid()
     if vapid_key is None:
-        return False
+        return 0
     subs = db.get_user_push_subscriptions(user_id)
     if not subs:
-        return False
+        return 0
     payload = json.dumps({
         "title": title,
         "body": body,
@@ -1757,9 +1766,10 @@ def send_push_notification(user_id, title, body, icon=None, tag=None, data=None)
         "tag": tag or "default",
         "data": data or {},
     })
+    ok_count = 0
     for sub in subs:
         try:
-            webpush(
+            _webpush_func(
                 subscription_info={
                     "endpoint": sub["endpoint"],
                     "keys": {"p256dh": sub["p256dh_key"], "auth": sub["auth_key"]},
@@ -1768,6 +1778,7 @@ def send_push_notification(user_id, title, body, icon=None, tag=None, data=None)
                 vapid_private_key=vapid_key,
                 vapid_claims={"sub": VAPID_CLAIM_EMAIL},
             )
+            ok_count += 1
         except Exception as e:
             print(f"[push] Failed to send to user {user_id}: {type(e).__name__}: {e}", file=sys.stderr)
             err_str = str(e)
@@ -1776,7 +1787,7 @@ def send_push_notification(user_id, title, body, icon=None, tag=None, data=None)
                     db.remove_push_subscription(user_id, sub["endpoint"])
                 except Exception:
                     pass
-    return True
+    return ok_count
 
 
 @app.route("/api/notifications/vapid-public-key", methods=["GET"])
@@ -1838,14 +1849,15 @@ def api_daily_digest():
         if yesterday_total > 0:
             body_parts.append(f"Yesterday: ৳{yesterday_total:,.0f}")
         body_parts.append(f"Month to date: ৳{month_total:,.0f}")
-        send_push_notification(
+        ok_count = send_push_notification(
             user_id=uid,
             title="📊 Daily Summary",
             body=" | ".join(body_parts),
             tag="daily-digest",
             data={"type": "daily_digest"},
         )
-        sent += 1
+        if ok_count:
+            sent += 1
     return jsonify({"sent": sent})
 
 
