@@ -909,7 +909,7 @@ def clean_date_refs(text):
     return d
 
 
-def split_expenses(description):
+def split_expenses(description, learned_categories=None):
     """Split a multi-item expense description into individual items."""
     if not _has_api_key():
         return None
@@ -941,6 +941,12 @@ def split_expenses(description):
                 else:
                     cat = "Other"
             item["category"] = cat
+        # Override LLM categories with user's learned associations
+        if learned_categories:
+            for item in items:
+                learned_cat = check_learned(item.get("description", ""), learned_categories)
+                if learned_cat:
+                    item["category"] = learned_cat
         # Leave single-item results as-is (caller decides if split is useful)
         return items
     except Exception:

@@ -1133,7 +1133,7 @@ def api_chat():
 
     if not skip_expense:
         # Step 1: Try expense parsing via split_expenses (handles multi & single item)
-        items = split_expenses(cleaned_message)
+        items = split_expenses(cleaned_message, learned_categories=learned)
         if items and all(item.get("amount", 0) > 0 for item in items):
             for item in items:
                 item["description"] = clean_date_refs(item.get("description", ""))
