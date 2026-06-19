@@ -1942,6 +1942,13 @@ def api_transcribe():
         return jsonify({"error": str(e)}), 500
 
 
+# ── Service Worker (for push notifications & caching) ──────
+
+@app.route("/sw.js")
+def service_worker():
+    return app.send_static_file("sw.js")
+
+
 # ── SPA catch-all ─────────────────────────────────────────
 
 @app.route("/")

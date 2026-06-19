@@ -2382,10 +2382,20 @@ async function subscribeToPush() {
   const permission = await Notification.requestPermission();
   if (permission !== "granted") { console.log('push: permission not granted:', permission); return; }
   try {
-    const registration = await Promise.race([
-      navigator.serviceWorker.ready,
-      new Promise((_, rej) => setTimeout(() => rej(new Error('SW ready timed out')), 10000)),
-    ]);
+    let registration = await navigator.serviceWorker.getRegistration();
+    if (!registration) {
+      registration = await navigator.serviceWorker.register('/sw.js');
+    }
+    if (registration.installing || registration.waiting) {
+      const sw = registration.installing || registration.waiting;
+      await new Promise((resolve, reject) => {
+        sw.addEventListener('statechange', () => {
+          if (sw.state === 'activated') resolve();
+          if (sw.state === 'redundant') reject(new Error('SW redundant'));
+        });
+        if (sw.state === 'activated') resolve();
+      });
+    }
     console.log('push: SW ready');
     const keyRes = await api.get("/api/notifications/vapid-public-key");
     if (!keyRes.ok || !keyRes.data?.publicKey) { console.log('push: no public key'); return; }
@@ -2409,10 +2419,7 @@ async function subscribeToPush() {
 async function unsubscribeFromPush() {
   try {
     if (!("serviceWorker" in navigator)) return;
-    const registration = await Promise.race([
-      navigator.serviceWorker.ready,
-      new Promise(r => setTimeout(r, 3000)),
-    ]);
+    const registration = await navigator.serviceWorker.getRegistration();
     if (!registration) return;
     const subscription = await registration.pushManager.getSubscription();
     if (subscription) {
