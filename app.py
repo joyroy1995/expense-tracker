@@ -1,4 +1,5 @@
 import os
+import base64
 from flask import Flask, render_template, request, redirect, url_for, session, jsonify
 from functools import wraps
 from datetime import datetime, timedelta, date
@@ -9,9 +10,12 @@ import calendar
 import json
 import sys
 import database as db
+from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
+from cryptography.hazmat.backends import default_backend
+from cryptography.hazmat.primitives import serialization
 from llm_service import extract_expense, predict_expense, extract_keywords, generate_sql, correct_sql, answer_from_results, format_answer, split_expenses, _clean_split_desc, extract_date_reference, clean_date_refs, detect_budget_intent, is_question, transcribe_audio, decompose_question, compose_answers, generate_forecast
 from database import _ALL_CATEGORIES
-from config import USERNAME, PASSWORD, SECRET_KEY, CATEGORY_COLORS, TIMEZONE, SEED_CATEGORIES, VAPID_PRIVATE_KEY, VAPID_CLAIM_EMAIL, VAPID_APPLICATION_SERVER_KEY
+from config import USERNAME, PASSWORD, SECRET_KEY, CATEGORY_COLORS, TIMEZONE, SEED_CATEGORIES, VAPID_PRIVATE_KEY, VAPID_CLAIM_EMAIL
 
 app = Flask(__name__)
 app.secret_key = SECRET_KEY
@@ -1690,6 +1694,35 @@ def api_daily_totals():
 
 _vapid_instance = None
 _pywebpush_available = None
+_vapid_public_key_cache = None
+
+def _load_vapid():
+    global _vapid_instance, _vapid_public_key_cache
+    if _vapid_instance is not None:
+        return _vapid_instance, _vapid_public_key_cache
+    try:
+        key_bytes = VAPID_PRIVATE_KEY.encode()
+        # Try py_vapid first (pywebpush natively supports Vapid instances)
+        try:
+            from py_vapid import Vapid
+            _vapid_instance = Vapid.from_pem(key_bytes)
+        except ImportError:
+            _vapid_instance = serialization.load_pem_private_key(
+                key_bytes, password=None, backend=default_backend()
+            )
+        # Derive public key for client subscription
+        from cryptography.hazmat.primitives.asymmetric.ec import EllipticCurvePrivateKey
+        if isinstance(_vapid_instance, EllipticCurvePrivateKey):
+            raw_pub = _vapid_instance.public_key().public_bytes(Encoding.X962, PublicFormat.UncompressedPoint)
+        else:
+            raw_pub = _vapid_instance.public_key.public_bytes(Encoding.X962, PublicFormat.UncompressedPoint)
+        _vapid_public_key_cache = base64.urlsafe_b64encode(raw_pub).rstrip(b"=").decode()
+        return _vapid_instance, _vapid_public_key_cache
+    except Exception as e:
+        print(f"[push] Failed to load VAPID key: {e}", file=sys.stderr)
+        _vapid_instance = None
+        _vapid_public_key_cache = None
+        return None, None
 
 def send_push_notification(user_id, title, body, icon=None, tag=None, data=None):
     """Send push notification to all subscriptions of a user.
@@ -1706,14 +1739,9 @@ def send_push_notification(user_id, title, body, icon=None, tag=None, data=None)
             return False
     if not _pywebpush_available:
         return False
-    global _vapid_instance
-    if _vapid_instance is None:
-        try:
-            from py_vapid import Vapid
-            _vapid_instance = Vapid.from_pem(VAPID_PRIVATE_KEY.encode())
-        except Exception as e:
-            print(f"[push] Failed to load VAPID key: {e}", file=sys.stderr)
-            return False
+    vapid_key, _ = _load_vapid()
+    if vapid_key is None:
+        return False
     subs = db.get_user_push_subscriptions(user_id)
     if not subs:
         return False
@@ -1733,21 +1761,26 @@ def send_push_notification(user_id, title, body, icon=None, tag=None, data=None)
                     "keys": {"p256dh": sub["p256dh_key"], "auth": sub["auth_key"]},
                 },
                 data=payload,
-                vapid_private_key=_vapid_instance,
+                vapid_private_key=vapid_key,
                 vapid_claims={"sub": VAPID_CLAIM_EMAIL},
             )
         except Exception as e:
             print(f"[push] Failed to send to user {user_id}: {type(e).__name__}: {e}", file=sys.stderr)
-            try:
-                db.remove_push_subscription(user_id, sub["endpoint"])
-            except Exception:
-                pass
+            err_str = str(e)
+            if "410" in err_str or "404" in err_str or "gone" in err_str.lower() or "unregistered" in err_str.lower():
+                try:
+                    db.remove_push_subscription(user_id, sub["endpoint"])
+                except Exception:
+                    pass
     return True
 
 
 @app.route("/api/notifications/vapid-public-key", methods=["GET"])
 def api_vapid_public_key():
-    return jsonify({"publicKey": VAPID_APPLICATION_SERVER_KEY})
+    _, pub_key = _load_vapid()
+    if not pub_key:
+        return jsonify({"error": "VAPID key not configured"}), 500
+    return jsonify({"publicKey": pub_key})
 
 
 @app.route("/api/notifications/subscribe", methods=["POST"])
