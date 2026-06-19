@@ -1,17 +1,6 @@
 const CACHE = "expense-tracker-v3";
-const STATIC_ASSETS = [
-  "/",
-  "/static/style.css",
-  "/static/script.js",
-  "/static/manifest.json",
-  "/static/icon-192.png",
-  "/static/icon-512.png",
-];
 
 self.addEventListener("install", (event) => {
-  event.waitUntil(
-    caches.open(CACHE).then((cache) => cache.addAll(STATIC_ASSETS))
-  );
   self.skipWaiting();
 });
 
@@ -35,10 +24,7 @@ self.addEventListener("fetch", (event) => {
   }
 
   // Static assets: cache-first
-  if (
-    STATIC_ASSETS.includes(url.pathname) ||
-    /\.(css|js|png|svg|ico|woff2?)$/.test(url.pathname)
-  ) {
+  if (/\.(css|js|png|svg|ico|woff2?)$/.test(url.pathname)) {
     event.respondWith(cacheFirst(request));
     return;
   }

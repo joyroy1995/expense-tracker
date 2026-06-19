@@ -53,7 +53,9 @@
     <script src="{{ url_for('static', filename='script.js') }}"></script>
     <script>
       if ('serviceWorker' in navigator) {
-        navigator.serviceWorker.register('/static/sw.js');
+        navigator.serviceWorker.register('/static/sw.js').catch(e => {
+          console.error('SW registration failed:', e);
+        });
       }
     </script>
 </body>
