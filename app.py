@@ -437,15 +437,21 @@ def _extract_item_keyword(q):
     # Pattern 1: "bought/buy/purchase X"
     m = re.search(r'\b(?:bought|buy|purchase|purchased|get|got)\s+(?:a\s+|an\s+|the\s+|some\s+)?(\w+)', q)
     if m:
-        return m.group(1).strip()
+        word = m.group(1).strip()
+        if word not in _SKIP_WORDS:
+            return word
     # Pattern 2: "spent/spend on X" or "spent on X fare/ticket/etc"
     m = re.search(r'\b(?:spent|spend)\s+on\s+(?:a\s+|an\s+|the\s+)?(\w+(?:\s+\w+)?)', q)
     if m:
-        return m.group(1).strip().split()[0]
+        word = m.group(1).strip().split()[0]
+        if word not in _SKIP_WORDS:
+            return word
     # Pattern 3: "on X" after "how much" (e.g. "how much on rickshaw")
     m = re.search(r'\bhow\s+much\s+(?:on|for)\s+(?:a\s+|an\s+|the\s+)?(\w+)', q)
     if m:
-        return m.group(1).strip()
+        word = m.group(1).strip()
+        if word not in _SKIP_WORDS:
+            return word
     # Pattern 4: "X expenses" — word right before "expenses/expense" (e.g. "rickshaw expenses")
     m = re.search(r'\b(\w+)\s+expenses?\b', q)
     if m:
@@ -959,7 +965,7 @@ def api_ask():
     date_context = f"Today is {current_date}."
     if expense_date:
         date_context += f" The user is referring to date {expense_date}."
-    question_with_context = f"{date_context}\n\nQuestion: {question}"
+    question_with_context = f"{date_context}\n\nQuestion: {cleaned_for_date}"
 
     # Try decomposition
     sub_questions = decompose_question(question_with_context, schema, history=history)
@@ -1161,7 +1167,7 @@ def api_chat():
     date_context = f"Today is {current_date}."
     if expense_date:
         date_context += f" The user is referring to date {expense_date}."
-    question_with_context = f"{date_context}\n\nQuestion: {message}"
+    question_with_context = f"{date_context}\n\nQuestion: {cleaned_message}"
 
     # Try decomposition
     sub_questions = decompose_question(question_with_context, schema, history=history)
