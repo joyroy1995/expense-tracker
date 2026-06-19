@@ -2392,7 +2392,11 @@ async function subscribeToPush() {
 async function unsubscribeFromPush() {
   try {
     if (!("serviceWorker" in navigator)) return;
-    const registration = await navigator.serviceWorker.ready;
+    const registration = await Promise.race([
+      navigator.serviceWorker.ready,
+      new Promise(r => setTimeout(r, 3000)),
+    ]);
+    if (!registration) return;
     const subscription = await registration.pushManager.getSubscription();
     if (subscription) {
       const key = subscription.toJSON();
@@ -2406,7 +2410,7 @@ async function unsubscribeFromPush() {
 
 // Logout handler
 document.getElementById('logoutBtn')?.addEventListener('click', async () => {
-  await unsubscribeFromPush();
+  unsubscribeFromPush();
   await api.post('/api/logout');
   currentUser = null;
   navigate('/login');
