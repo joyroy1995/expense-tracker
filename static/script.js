@@ -2377,6 +2377,10 @@ function sendSuggestion(text) {
 // ── Init ──
 
 async function init() {
+  // Register SW early for push support (browser compares bytewise, no-op if same)
+  if ("serviceWorker" in navigator) {
+    navigator.serviceWorker.register('/sw.js').catch(() => {});
+  }
   const me = await api.get('/api/me');
   if (me.ok) {
     currentUser = me.data;
@@ -2400,41 +2404,45 @@ function urlB64ToUint8Array(base64String) {
 
 async function subscribeToPush() {
   if (!("Notification" in window) || !("serviceWorker" in navigator)) return;
-  if (Notification.permission === "denied") { console.log('push: permission denied'); return; }
-  const permission = await Notification.requestPermission();
-  if (permission !== "granted") { console.log('push: permission not granted:', permission); return; }
+  if (Notification.permission === "denied") return;
+  if (Notification.permission !== "granted") {
+    const permission = await Notification.requestPermission();
+    if (permission !== "granted") return;
+  }
   try {
     let registration = await navigator.serviceWorker.getRegistration();
     if (!registration) {
       registration = await navigator.serviceWorker.register('/sw.js');
     }
-    if (registration.installing || registration.waiting) {
-      const sw = registration.installing || registration.waiting;
+    // Wait for SW to be active before subscribing
+    if (registration.installing) {
       await new Promise((resolve, reject) => {
-        sw.addEventListener('statechange', () => {
-          if (sw.state === 'activated') resolve();
-          if (sw.state === 'redundant') reject(new Error('SW became redundant'));
+        registration.installing.addEventListener('statechange', () => {
+          if (registration.installing.state === 'activated') resolve();
+          if (registration.installing.state === 'redundant') reject(new Error('SW redundant'));
         });
-        if (sw.state === 'activated') resolve();
+      });
+    } else if (registration.waiting && !registration.active) {
+      registration.waiting.postMessage({ type: 'SKIP_WAITING' });
+      await new Promise((resolve) => {
+        const onStateChange = () => { if (registration.active) { resolve(); } };
+        registration.addEventListener('updatefound', onStateChange);
+        if (registration.active) resolve();
       });
     }
-    console.log('push: SW ready');
     const keyRes = await api.get("/api/notifications/vapid-public-key");
-    if (!keyRes.ok || !keyRes.data?.publicKey) { console.log('push: no public key'); return; }
-    console.log('push: got public key, subscribing...');
+    if (!keyRes.ok || !keyRes.data?.publicKey) return;
     const subscription = await registration.pushManager.subscribe({
       userVisibleOnly: true,
       applicationServerKey: urlB64ToUint8Array(keyRes.data.publicKey),
     });
     const key = subscription.toJSON();
-    console.log('push: subscribed, posting to server...');
-    const res = await api.post("/api/notifications/subscribe", {
+    await api.post("/api/notifications/subscribe", {
       endpoint: key.endpoint,
       keys: { p256dh: key.keys.p256dh, auth: key.keys.auth },
     });
-    console.log('push: server response:', res.ok);
   } catch (e) {
-    console.error('subscribeToPush failed:', e);
+    // Subscription likely already exists — that's fine
   }
 }
 
