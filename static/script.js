@@ -340,6 +340,7 @@ async function renderLogin() {
       return;
     }
     currentUser = res.data;
+    subscribeToPush();
     navigate('/');
   });
 }
@@ -390,6 +391,7 @@ async function renderRegister() {
       return;
     }
     currentUser = res.data;
+    subscribeToPush();
     navigate('/');
   });
 }
@@ -2308,14 +2310,59 @@ async function init() {
   const me = await api.get('/api/me');
   if (me.ok) {
     currentUser = me.data;
+    subscribeToPush();
   }
   // Pre-fetch suggestions for welcome screen
   await fetchSuggestions();
   renderRoute();
 }
 
+// ── Push Notification Subscription ──
+
+function urlB64ToUint8Array(base64String) {
+  const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
+  const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
+  const rawData = atob(base64);
+  return Uint8Array.from([...rawData].map((c) => c.charCodeAt(0)));
+}
+
+async function subscribeToPush() {
+  if (!("Notification" in window) || !("serviceWorker" in navigator)) return;
+  if (Notification.permission === "denied") return;
+  const permission = await Notification.requestPermission();
+  if (permission !== "granted") return;
+  try {
+    const registration = await navigator.serviceWorker.ready;
+    const keyRes = await api.get("/api/notifications/vapid-public-key");
+    if (!keyRes.ok || !keyRes.data?.publicKey) return;
+    const subscription = await registration.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: urlB64ToUint8Array(keyRes.data.publicKey),
+    });
+    const key = subscription.toJSON();
+    await api.post("/api/notifications/subscribe", {
+      endpoint: key.endpoint,
+      keys: { p256dh: key.keys.p256dh, auth: key.keys.auth },
+    });
+  } catch {}
+}
+
+async function unsubscribeFromPush() {
+  try {
+    if (!("serviceWorker" in navigator)) return;
+    const registration = await navigator.serviceWorker.ready;
+    const subscription = await registration.pushManager.getSubscription();
+    if (subscription) {
+      const key = subscription.toJSON();
+      await api.post("/api/notifications/unsubscribe", { endpoint: key.endpoint });
+      await subscription.unsubscribe();
+    }
+  } catch {}
+}
+
 // Logout handler
 document.getElementById('logoutBtn')?.addEventListener('click', async () => {
+  await unsubscribeFromPush();
   await api.post('/api/logout');
   currentUser = null;
   navigate('/login');

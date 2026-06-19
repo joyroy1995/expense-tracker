@@ -1,3 +1,4 @@
+import os
 from flask import Flask, render_template, request, redirect, url_for, session, jsonify
 from functools import wraps
 from datetime import datetime, timedelta, date
@@ -5,10 +6,11 @@ from werkzeug.security import generate_password_hash, check_password_hash
 import re
 import random
 import calendar
+import json
 import database as db
 from llm_service import extract_expense, predict_expense, extract_keywords, generate_sql, correct_sql, answer_from_results, format_answer, split_expenses, _clean_split_desc, extract_date_reference, clean_date_refs, detect_budget_intent, is_question, transcribe_audio, decompose_question, compose_answers, generate_forecast
 from database import _ALL_CATEGORIES
-from config import USERNAME, PASSWORD, SECRET_KEY, CATEGORY_COLORS, TIMEZONE, SEED_CATEGORIES
+from config import USERNAME, PASSWORD, SECRET_KEY, CATEGORY_COLORS, TIMEZONE, SEED_CATEGORIES, VAPID_PRIVATE_KEY, VAPID_CLAIM_EMAIL, VAPID_APPLICATION_SERVER_KEY
 
 app = Flask(__name__)
 app.secret_key = SECRET_KEY
@@ -1266,6 +1268,20 @@ def api_expenses_bulk():
 
     budget_alerts = db.get_budget_status(session["user_id"])
     budget_alerts = [b for b in budget_alerts if b["percentage"] >= 80]
+
+    if budget_alerts:
+        alerts_body = "; ".join(
+            f"{a['category']} at {a['percentage']}% (৳{a['spent']:,.0f}/৳{a['budget_amount']:,.0f})"
+            for a in budget_alerts
+        )
+        send_push_notification(
+            user_id=session["user_id"],
+            title="⚠️ Budget Alert",
+            body=alerts_body,
+            tag="budget-alert",
+            data={"type": "budget", "alerts": budget_alerts},
+        )
+
     return jsonify({"count": len(saved), "expenses": saved, "budget_alerts": budget_alerts})
 
 
@@ -1306,6 +1322,19 @@ def api_add_expense():
 
     budget_alerts = db.get_budget_status(session["user_id"])
     budget_alerts = [b for b in budget_alerts if b["percentage"] >= 80]
+
+    if budget_alerts:
+        alerts_body = "; ".join(
+            f"{a['category']} at {a['percentage']}% (৳{a['spent']:,.0f}/৳{a['budget_amount']:,.0f})"
+            for a in budget_alerts
+        )
+        send_push_notification(
+            user_id=session["user_id"],
+            title="⚠️ Budget Alert",
+            body=alerts_body,
+            tag="budget-alert",
+            data={"type": "budget", "alerts": budget_alerts},
+        )
 
     return jsonify(
         {
@@ -1589,6 +1618,14 @@ def api_process_recurring():
         next_date = db.compute_next_date(rec["next_date"], rec["frequency"], rec["interval_value"], rec["interval_unit"])
         db.update_next_date(rec["id"], next_date)
         created.append({"id": exp_id, "description": rec["description"], "amount": rec["amount"]})
+    if created:
+        send_push_notification(
+            user_id=uid,
+            title="🔄 Recurring Expenses Added",
+            body=f"{len(created)} recurring expense(s) automatically created.",
+            tag="recurring",
+            data={"type": "recurring", "count": len(created)},
+        )
     return jsonify({"processed": len(created), "expenses": created})
 
 
@@ -1604,6 +1641,112 @@ def api_daily_totals():
     totals = db.get_daily_totals(year, month, user_id=uid)
     totals_map = {row["date"]: row["total"] for row in totals}
     return jsonify({"totals": totals_map, "year": year, "month": month})
+
+
+# ── Push Notifications ─────────────────────────────────────
+
+def send_push_notification(user_id, title, body, icon=None, tag=None, data=None):
+    """Send push notification to all subscriptions of a user."""
+    if not VAPID_PRIVATE_KEY or not VAPID_CLAIM_EMAIL:
+        return
+    try:
+        from pywebpush import webpush
+    except ImportError:
+        return
+    subs = db.get_user_push_subscriptions(user_id)
+    payload = json.dumps({
+        "title": title,
+        "body": body,
+        "icon": icon or "/static/icon-192.png",
+        "badge": "/static/icon-192.png",
+        "tag": tag or "default",
+        "data": data or {},
+    })
+    for sub in subs:
+        try:
+            webpush(
+                subscription_info={
+                    "endpoint": sub["endpoint"],
+                    "keys": {"p256dh": sub["p256dh_key"], "auth": sub["auth_key"]},
+                },
+                data=payload,
+                vapid_private_key=VAPID_PRIVATE_KEY,
+                vapid_claims={"sub": VAPID_CLAIM_EMAIL},
+            )
+        except Exception:
+            try:
+                db.remove_push_subscription(user_id, sub["endpoint"])
+            except Exception:
+                pass
+
+
+@app.route("/api/notifications/vapid-public-key", methods=["GET"])
+def api_vapid_public_key():
+    return jsonify({"publicKey": VAPID_APPLICATION_SERVER_KEY})
+
+
+@app.route("/api/notifications/subscribe", methods=["POST"])
+@login_required
+def api_subscribe():
+    data = request.get_json()
+    endpoint = data.get("endpoint", "").strip()
+    keys = data.get("keys", {})
+    p256dh = keys.get("p256dh", "").strip()
+    auth = keys.get("auth", "").strip()
+    if not endpoint or not p256dh or not auth:
+        return jsonify({"error": "endpoint, p256dh, and auth required"}), 400
+    db.save_push_subscription(session["user_id"], endpoint, p256dh, auth)
+    return jsonify({"success": True})
+
+
+@app.route("/api/notifications/unsubscribe", methods=["POST"])
+@login_required
+def api_unsubscribe():
+    data = request.get_json()
+    endpoint = data.get("endpoint", "").strip()
+    if not endpoint:
+        return jsonify({"error": "endpoint required"}), 400
+    db.remove_push_subscription(session["user_id"], endpoint)
+    return jsonify({"success": True})
+
+
+@app.route("/api/notifications/daily-digest", methods=["POST"])
+def api_daily_digest():
+    cron_secret = os.environ.get("CRON_SECRET", "")
+    if cron_secret and request.args.get("key") != cron_secret:
+        return jsonify({"error": "Unauthorized"}), 401
+    users = db.get_all_push_subscriptions()
+    user_ids = set(u["user_id"] for u in users)
+    sent = 0
+    for uid in user_ids:
+        yesterday = (datetime.now(TIMEZONE) - timedelta(days=1)).strftime("%Y-%m-%d")
+        month = datetime.now(TIMEZONE).strftime("%Y-%m")
+        conn = db.get_connection()
+        y_row = conn.execute(
+            db.text("SELECT COALESCE(SUM(amount), 0) FROM expenses WHERE user_id = :uid AND date = :d"),
+            {"uid": uid, "d": yesterday},
+        ).fetchone()
+        m_row = conn.execute(
+            db.text("SELECT COALESCE(SUM(amount), 0) FROM expenses WHERE user_id = :uid AND SUBSTR(date, 1, 7) = :m"),
+            {"uid": uid, "m": month},
+        ).fetchone()
+        yesterday_total = y_row[0] if y_row else 0
+        month_total = m_row[0] if m_row else 0
+        if yesterday_total == 0 and month_total == 0:
+            continue
+        body_parts = []
+        if yesterday_total > 0:
+            body_parts.append(f"Yesterday: ৳{yesterday_total:,.0f}")
+        body_parts.append(f"Month to date: ৳{month_total:,.0f}")
+        send_push_notification(
+            user_id=uid,
+            title="📊 Daily Summary",
+            body=" | ".join(body_parts),
+            tag="daily-digest",
+            data={"type": "daily_digest"},
+        )
+        sent += 1
+    return jsonify({"sent": sent})
 
 
 # ── Spending Forecast ──────────────────────────────────────

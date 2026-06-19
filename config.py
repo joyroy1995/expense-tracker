@@ -21,6 +21,11 @@ PASSWORD = os.environ.get("APP_PASSWORD", "admin123")
 
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 
+VAPID_PUBLIC_KEY = os.environ.get("VAPID_PUBLIC_KEY", "")
+VAPID_PRIVATE_KEY = os.environ.get("VAPID_PRIVATE_KEY", "")
+VAPID_CLAIM_EMAIL = os.environ.get("VAPID_CLAIM_EMAIL", "mailto:admin@expenses.app")
+VAPID_APPLICATION_SERVER_KEY = os.environ.get("VAPID_APPLICATION_SERVER_KEY", "")
+
 DATABASE_PATH = os.environ.get(
     "DATABASE_PATH",
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "expenses.db"),

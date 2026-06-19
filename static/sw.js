@@ -1,4 +1,4 @@
-const CACHE = "expense-tracker-v1";
+const CACHE = "expense-tracker-v2";
 const STATIC_ASSETS = [
   "/",
   "/static/style.css",
@@ -45,6 +45,45 @@ self.addEventListener("fetch", (event) => {
 
   // Navigation & all else: network-first
   event.respondWith(networkFirst(request));
+});
+
+self.addEventListener("push", (event) => {
+  let data = { title: "Expense Tracker", body: "", icon: "/static/icon-192.png" };
+  try {
+    const payload = event.data ? JSON.parse(event.data.text()) : {};
+    data = { ...data, ...payload };
+  } catch {}
+
+  event.waitUntil(
+    self.registration.showNotification(data.title, {
+      body: data.body,
+      icon: data.icon,
+      badge: data.badge || data.icon,
+      tag: data.tag || "default",
+      data: data.data || {},
+      vibrate: [200, 100, 200],
+      requireInteraction: data.tag === "budget-alert",
+    })
+  );
+});
+
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+  const urlToOpen = new URL("/", self.location.origin);
+  const ntype = event.notification.data?.type;
+  if (ntype === "budget") {
+    urlToOpen.pathname = "/budgets";
+  } else if (ntype === "recurring") {
+    urlToOpen.pathname = "/recurring";
+  }
+  event.waitUntil(
+    clients.matchAll({ type: "window", includeUncontrolled: true }).then((windowClients) => {
+      for (const client of windowClients) {
+        if (client.url === urlToOpen.href && "focus" in client) return client.focus();
+      }
+      return clients.openWindow(urlToOpen.href);
+    })
+  );
 });
 
 async function cacheFirst(request) {

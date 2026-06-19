@@ -276,6 +276,19 @@ def _init_schema(conn):
         conn.execute(
             text("CREATE INDEX IF NOT EXISTS idx_qa_cache_hash ON qa_cache(query_hash)")
         )
+        conn.execute(
+            text("""
+                CREATE TABLE IF NOT EXISTS push_subscriptions (
+                    id SERIAL PRIMARY KEY,
+                    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    endpoint TEXT NOT NULL,
+                    p256dh_key TEXT NOT NULL,
+                    auth_key TEXT NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(user_id, endpoint)
+                )
+            """)
+        )
     else:
         conn.execute(
             text("""
@@ -293,6 +306,20 @@ def _init_schema(conn):
         )
         conn.execute(
             text("CREATE INDEX IF NOT EXISTS idx_qa_cache_hash ON qa_cache(query_hash)")
+        )
+        conn.execute(
+            text("""
+                CREATE TABLE IF NOT EXISTS push_subscriptions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL,
+                    endpoint TEXT NOT NULL,
+                    p256dh_key TEXT NOT NULL,
+                    auth_key TEXT NOT NULL,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+                    UNIQUE(user_id, endpoint)
+                )
+            """)
         )
 
 
@@ -394,6 +421,19 @@ def _run_migrations():
             now = datetime.now(TIMEZONE).strftime("%Y-%m-%d %H:%M:%S")
             conn.execute(
                 text("INSERT INTO migrations (name, applied_at) VALUES ('recurring_transactions', :n)"),
+                {"n": now},
+            )
+            conn.commit()
+
+    # ── Migration: push_subscriptions table ──
+    with engine.connect() as conn:
+        result = conn.execute(
+            text("SELECT COUNT(*) FROM migrations WHERE name = 'push_subscriptions'")
+        )
+        if result.fetchone()[0] == 0:
+            now = datetime.now(TIMEZONE).strftime("%Y-%m-%d %H:%M:%S")
+            conn.execute(
+                text("INSERT INTO migrations (name, applied_at) VALUES ('push_subscriptions', :n)"),
                 {"n": now},
             )
             conn.commit()
@@ -926,6 +966,50 @@ def get_learned_categories(user_id):
         {"uid": user_id},
     ).fetchall()
     return {row[0]: row[1] for row in rows}
+
+
+# ── Push subscriptions ──────────────────────────────────────
+
+def save_push_subscription(user_id, endpoint, p256dh_key, auth_key):
+    conn = get_connection()
+    now = datetime.now(TIMEZONE).strftime("%Y-%m-%d %H:%M:%S")
+    conn.execute(
+        text("""
+            INSERT INTO push_subscriptions (user_id, endpoint, p256dh_key, auth_key, created_at)
+            VALUES (:uid, :ep, :p256, :auth, :now)
+            ON CONFLICT(user_id, endpoint) DO UPDATE SET
+                p256dh_key = :p2562, auth_key = :auth2, created_at = :now2
+        """),
+        {"uid": user_id, "ep": endpoint, "p256": p256dh_key, "auth": auth_key, "now": now,
+         "p2562": p256dh_key, "auth2": auth_key, "now2": now},
+    )
+    conn.commit()
+
+
+def remove_push_subscription(user_id, endpoint):
+    conn = get_connection()
+    conn.execute(
+        text("DELETE FROM push_subscriptions WHERE user_id = :uid AND endpoint = :ep"),
+        {"uid": user_id, "ep": endpoint},
+    )
+    conn.commit()
+
+
+def get_user_push_subscriptions(user_id):
+    conn = get_connection()
+    rows = conn.execute(
+        text("SELECT endpoint, p256dh_key, auth_key FROM push_subscriptions WHERE user_id = :uid"),
+        {"uid": user_id},
+    ).fetchall()
+    return [{"endpoint": r[0], "p256dh_key": r[1], "auth_key": r[2]} for r in rows]
+
+
+def get_all_push_subscriptions():
+    conn = get_connection()
+    rows = conn.execute(
+        text("SELECT DISTINCT user_id, endpoint, p256dh_key, auth_key FROM push_subscriptions")
+    ).fetchall()
+    return [{"user_id": r[0], "endpoint": r[1], "p256dh_key": r[2], "auth_key": r[3]} for r in rows]
 
 
 OVERALL_BUDGET_CATEGORY = "__overall__"
