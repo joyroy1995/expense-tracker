@@ -782,6 +782,44 @@ def api_admin_delete_user(user_id):
     return jsonify({"success": True})
 
 
+@app.route("/api/admin/notifications/daily-digest/trigger", methods=["POST"])
+@login_required
+@superuser_required
+def api_admin_trigger_digest():
+    users = db.get_all_push_subscriptions()
+    user_ids = set(u["user_id"] for u in users)
+    sent = 0
+    for uid in user_ids:
+        yesterday = (datetime.now(TIMEZONE) - timedelta(days=1)).strftime("%Y-%m-%d")
+        month = datetime.now(TIMEZONE).strftime("%Y-%m")
+        conn = db.get_connection()
+        y_row = conn.execute(
+            db.text("SELECT COALESCE(SUM(amount), 0) FROM expenses WHERE user_id = :uid AND date = :d"),
+            {"uid": uid, "d": yesterday},
+        ).fetchone()
+        m_row = conn.execute(
+            db.text("SELECT COALESCE(SUM(amount), 0) FROM expenses WHERE user_id = :uid AND SUBSTR(date, 1, 7) = :m"),
+            {"uid": uid, "m": month},
+        ).fetchone()
+        yesterday_total = y_row[0] if y_row else 0
+        month_total = m_row[0] if m_row else 0
+        if yesterday_total == 0 and month_total == 0:
+            continue
+        body_parts = []
+        if yesterday_total > 0:
+            body_parts.append(f"Yesterday: ৳{yesterday_total:,.0f}")
+        body_parts.append(f"Month to date: ৳{month_total:,.0f}")
+        send_push_notification(
+            user_id=uid,
+            title="📊 Daily Summary",
+            body=" | ".join(body_parts),
+            tag="daily-digest",
+            data={"type": "daily_digest"},
+        )
+        sent += 1
+    return jsonify({"sent": sent})
+
+
 # ── API: Learn ──────────────────────────────────────────────
 
 @app.route("/api/learn", methods=["POST"])

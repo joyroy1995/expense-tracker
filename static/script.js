@@ -78,6 +78,7 @@ function getRoute() {
     '/calendar': 'calendar',
     '/recurring': 'recurring',
     '/admin/users': 'admin-users',
+    '/admin/notifications': 'admin-notifications',
   };
   return { view: routes[path] || 'home', params: p };
 }
@@ -106,6 +107,7 @@ function setLayout(type) {
   const topbar = document.getElementById('topbar');
   const app = document.getElementById('app');
   const adminLink = document.getElementById('adminLink');
+  const adminNotifLink = document.getElementById('adminNotifLink');
 
   if (type === 'auth') {
     document.body.className = 'login-page';
@@ -123,6 +125,9 @@ function setLayout(type) {
     app.className = 'container';
     if (adminLink) {
       adminLink.style.display = currentUser?.role === 'superuser' ? '' : 'none';
+    }
+    if (adminNotifLink) {
+      adminNotifLink.style.display = currentUser?.role === 'superuser' ? '' : 'none';
     }
     const path = window.location.pathname;
     document.querySelectorAll('.nav-link[data-link]').forEach(el => {
@@ -1506,6 +1511,41 @@ async function adminDeleteUser(userId) {
   renderAdminUsers();
 }
 
+// ── Admin Notifications ──
+
+async function renderAdminNotifications() {
+  if (currentUser?.role !== 'superuser') { navigate('/'); return; }
+  setLayout('app');
+  document.title = 'Daily Digest - Expense Tracker';
+  const app = document.getElementById('app');
+
+  app.innerHTML = `
+    <div class="card">
+      <h1 class="card-title" style="font-size:24px;">Daily Digest</h1>
+      <p class="text-muted" style="margin-bottom:16px;">Send the daily summary push notification to all subscribed users.</p>
+      <button class="btn btn-primary" onclick="adminTriggerDigest()" id="digestBtn">📤 Send Daily Digest Now</button>
+      <div id="digestResult" style="margin-top:12px;"></div>
+    </div>`;
+}
+
+async function adminTriggerDigest() {
+  const btn = document.getElementById('digestBtn');
+  const result = document.getElementById('digestResult');
+  btn.disabled = true;
+  btn.textContent = 'Sending...';
+  result.innerHTML = '';
+
+  const res = await api.post('/api/admin/notifications/daily-digest/trigger');
+  btn.disabled = false;
+  btn.textContent = '📤 Send Daily Digest Now';
+
+  if (!res.ok) {
+    result.innerHTML = `<div class="alert alert-error">${esc(res.error)}</div>`;
+    return;
+  }
+  result.innerHTML = `<div class="alert alert-success">Digest sent to ${res.data.sent} user(s)</div>`;
+}
+
 // ── Auth Error ──
 
 function handleAuthError(res) {
@@ -2430,6 +2470,7 @@ async function renderRoute() {
     case 'calendar': renderCalendar(); break;
     case 'recurring': renderRecurringTransactions(); break;
     case 'admin-users': renderAdminUsers(); break;
+    case 'admin-notifications': renderAdminNotifications(); break;
     default: renderHome(1);
   }
 }
