@@ -339,8 +339,10 @@ async function renderLogin() {
     const username = document.getElementById('loginUsername').value.trim();
     const password = document.getElementById('loginPassword').value.trim();
     // Start permission request synchronously (within user gesture)
-    const notifPromise = "Notification" in window && Notification.permission === "default"
-      ? Notification.requestPermission() : Promise.resolve(Notification.permission);
+    let notifPromise;
+    if ("Notification" in window && Notification.permission === "default") {
+      try { notifPromise = Notification.requestPermission(); } catch {}
+    }
     const res = await api.post('/api/login', { username, password });
     if (!res.ok) {
       errEl.textContent = res.error;
@@ -348,8 +350,10 @@ async function renderLogin() {
       return;
     }
     currentUser = res.data;
-    // After login, wait for permission decision and subscribe
-    const permission = await notifPromise;
+    let permission = Notification.permission;
+    if (notifPromise) {
+      try { permission = await notifPromise; } catch {}
+    }
     if (permission === "granted") subscribeToPush();
     navigate('/');
   });
@@ -394,8 +398,6 @@ async function renderRegister() {
     const username = document.getElementById('regUsername').value.trim();
     const password = document.getElementById('regPassword').value;
     const confirm = document.getElementById('regConfirm').value;
-    const notifPromise = "Notification" in window && Notification.permission === "default"
-      ? Notification.requestPermission() : Promise.resolve(Notification.permission);
     const res = await api.post('/api/register', { username, password, confirm });
     if (!res.ok) {
       errEl.textContent = res.error;
@@ -403,8 +405,10 @@ async function renderRegister() {
       return;
     }
     currentUser = res.data;
-    const permission = await notifPromise;
-    if (permission === "granted") subscribeToPush();
+    if ("Notification" in window && Notification.permission === "default") {
+      try { await Notification.requestPermission(); } catch {}
+    }
+    if (Notification.permission === "granted") subscribeToPush();
     navigate('/');
   });
 }
