@@ -808,15 +808,21 @@ def api_admin_trigger_digest():
         if yesterday_total > 0:
             body_parts.append(f"Yesterday: ৳{yesterday_total:,.0f}")
         body_parts.append(f"Month to date: ৳{month_total:,.0f}")
-        send_push_notification(
+        ok = send_push_notification(
             user_id=uid,
             title="📊 Daily Summary",
             body=" | ".join(body_parts),
             tag="daily-digest",
             data={"type": "daily_digest"},
         )
-        sent += 1
-    return jsonify({"sent": sent, "subscribed": len(user_ids)})
+        if ok:
+            sent += 1
+    return jsonify({
+        "sent": sent,
+        "subscribed": len(user_ids),
+        "vapid_loaded": _vapid_instance is not None,
+        "webpush_available": _pywebpush_available,
+    })
 
 
 # ── API: Learn ──────────────────────────────────────────────
@@ -1683,15 +1689,23 @@ def api_daily_totals():
 # ── Push Notifications ─────────────────────────────────────
 
 _vapid_instance = None
+_pywebpush_available = None
 
 def send_push_notification(user_id, title, body, icon=None, tag=None, data=None):
-    """Send push notification to all subscriptions of a user."""
+    """Send push notification to all subscriptions of a user.
+    Returns True if at least one push was attempted, False otherwise."""
     if not VAPID_PRIVATE_KEY or not VAPID_CLAIM_EMAIL:
-        return
-    try:
-        from pywebpush import webpush
-    except ImportError:
-        return
+        return False
+    global _pywebpush_available
+    if _pywebpush_available is None:
+        try:
+            from pywebpush import webpush
+            _pywebpush_available = True
+        except ImportError:
+            _pywebpush_available = False
+            return False
+    if not _pywebpush_available:
+        return False
     global _vapid_instance
     if _vapid_instance is None:
         try:
@@ -1699,8 +1713,10 @@ def send_push_notification(user_id, title, body, icon=None, tag=None, data=None)
             _vapid_instance = Vapid.from_pem(VAPID_PRIVATE_KEY.encode())
         except Exception as e:
             print(f"[push] Failed to load VAPID key: {e}", file=sys.stderr)
-            return
+            return False
     subs = db.get_user_push_subscriptions(user_id)
+    if not subs:
+        return False
     payload = json.dumps({
         "title": title,
         "body": body,
@@ -1726,6 +1742,7 @@ def send_push_notification(user_id, title, body, icon=None, tag=None, data=None)
                 db.remove_push_subscription(user_id, sub["endpoint"])
             except Exception:
                 pass
+    return True
 
 
 @app.route("/api/notifications/vapid-public-key", methods=["GET"])
