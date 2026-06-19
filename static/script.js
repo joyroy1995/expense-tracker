@@ -350,9 +350,12 @@ async function renderLogin() {
       return;
     }
     currentUser = res.data;
-    let permission = Notification.permission;
-    if (notifPromise) {
-      try { permission = await notifPromise; } catch {}
+    let permission = "denied";
+    if ("Notification" in window) {
+      permission = Notification.permission;
+      if (notifPromise) {
+        try { permission = await notifPromise; } catch {}
+      }
     }
     if (permission === "granted") subscribeToPush();
     navigate('/');
@@ -405,10 +408,15 @@ async function renderRegister() {
       return;
     }
     currentUser = res.data;
-    if ("Notification" in window && Notification.permission === "default") {
-      try { await Notification.requestPermission(); } catch {}
+    let permission = "denied";
+    if ("Notification" in window) {
+      permission = Notification.permission;
+      if (permission === "default") {
+        try { await Notification.requestPermission(); } catch {}
+        permission = Notification.permission;
+      }
     }
-    if (Notification.permission === "granted") subscribeToPush();
+    if (permission === "granted") subscribeToPush();
     navigate('/');
   });
 }
