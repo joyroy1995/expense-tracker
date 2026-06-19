@@ -1,4 +1,5 @@
 import os
+import re
 from zoneinfo import ZoneInfo
 
 # ── Load .env file (supports multiline PEM values) ──
@@ -39,19 +40,12 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 def _normalize_pem(s):
     if not s or "-----BEGIN" not in s:
         return s
-    s = s.replace("\\n", "\n")
-    if "\n" not in s:
-        begin = s.index("-----BEGIN")
-        end = s.index("-----END", begin) + len("-----END-----")
-        header = s[begin:s.index("\n", begin) if "\n" in s[begin:] else begin]
-        # Actually simpler: just reconstruct
-        import re
-        parts = re.split(r"-----.*?-----", s)
-        if len(parts) >= 3:
-            body = parts[1].strip()
-            body = "\n".join(body[i:i+64] for i in range(0, len(body), 64))
-            return f"-----BEGIN PRIVATE KEY-----\n{body}\n-----END PRIVATE KEY-----"
-    return s
+    m = re.search(r"-----BEGIN[^-]+-----\s*(.+?)\s*-----END[^-]+-----", s, re.DOTALL)
+    if not m:
+        return s
+    body = re.sub(r"\s", "", m.group(1))
+    lines = [body[i:i+64] for i in range(0, len(body), 64)]
+    return "-----BEGIN PRIVATE KEY-----\n" + "\n".join(lines) + "\n-----END PRIVATE KEY-----"
 
 VAPID_PUBLIC_KEY = os.environ.get("VAPID_PUBLIC_KEY", "")
 VAPID_PRIVATE_KEY = _normalize_pem(os.environ.get("VAPID_PRIVATE_KEY", ""))

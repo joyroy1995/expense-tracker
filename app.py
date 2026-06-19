@@ -1690,6 +1690,8 @@ def send_push_notification(user_id, title, body, icon=None, tag=None, data=None)
         from pywebpush import webpush
     except ImportError:
         return
+    # Log key diagnostics for debugging (no secret data)
+    print(f"[push] Key: {VAPID_PRIVATE_KEY.count(chr(10))} newlines, has BEGIN={VAPID_PRIVATE_KEY.count('BEGIN')}, has END={VAPID_PRIVATE_KEY.count('END')}, len={len(VAPID_PRIVATE_KEY)}", file=sys.stderr)
     subs = db.get_user_push_subscriptions(user_id)
     payload = json.dumps({
         "title": title,
