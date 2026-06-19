@@ -1,17 +1,32 @@
 import os
 from zoneinfo import ZoneInfo
 
-# ── Load .env file ──
+# ── Load .env file (supports multiline PEM values) ──
 _env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
 if os.path.isfile(_env_path):
     with open(_env_path) as f:
-        for line in f:
-            line = line.strip()
-            if not line or line.startswith("#") or "=" not in line:
+        raw = f.readlines()
+    entries = []
+    buf = ""
+    for line in raw:
+        s = line.rstrip()
+        if not s or s.startswith("#"):
+            continue
+        if "=" in s:
+            maybe_key = s.split("=", 1)[0].strip()
+            if maybe_key.isidentifier():
+                if buf:
+                    entries.append(buf)
+                buf = s
                 continue
-            key, _, val = line.partition("=")
-            key, val = key.strip(), val.strip().strip("'\"")
-            os.environ.setdefault(key, val)
+        if buf:
+            buf += "\n" + s
+    if buf:
+        entries.append(buf)
+    for entry in entries:
+        key, _, val = entry.partition("=")
+        key, val = key.strip(), val.strip().strip("'\"")
+        os.environ.setdefault(key, val)
 
 SECRET_KEY = os.environ.get("SECRET_KEY", "change-this-to-a-random-secret-key")
 TIMEZONE = ZoneInfo("Asia/Dhaka")
