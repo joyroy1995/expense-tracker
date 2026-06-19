@@ -2391,7 +2391,7 @@ async function subscribeToPush() {
       await new Promise((resolve, reject) => {
         sw.addEventListener('statechange', () => {
           if (sw.state === 'activated') resolve();
-          if (sw.state === 'redundant') reject(new Error('SW redundant'));
+          if (sw.state === 'redundant') reject(new Error('SW became redundant'));
         });
         if (sw.state === 'activated') resolve();
       });

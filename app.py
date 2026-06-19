@@ -7,6 +7,7 @@ import re
 import random
 import calendar
 import json
+import sys
 import database as db
 from llm_service import extract_expense, predict_expense, extract_keywords, generate_sql, correct_sql, answer_from_results, format_answer, split_expenses, _clean_split_desc, extract_date_reference, clean_date_refs, detect_budget_intent, is_question, transcribe_audio, decompose_question, compose_answers, generate_forecast
 from database import _ALL_CATEGORIES
@@ -1709,7 +1710,8 @@ def send_push_notification(user_id, title, body, icon=None, tag=None, data=None)
                 vapid_private_key=VAPID_PRIVATE_KEY,
                 vapid_claims={"sub": VAPID_CLAIM_EMAIL},
             )
-        except Exception:
+        except Exception as e:
+            print(f"[push] Failed to send to user {user_id}: {type(e).__name__}: {e}", file=sys.stderr)
             try:
                 db.remove_push_subscription(user_id, sub["endpoint"])
             except Exception:
