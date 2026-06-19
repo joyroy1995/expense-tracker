@@ -1682,6 +1682,8 @@ def api_daily_totals():
 
 # ── Push Notifications ─────────────────────────────────────
 
+_vapid_instance = None
+
 def send_push_notification(user_id, title, body, icon=None, tag=None, data=None):
     """Send push notification to all subscriptions of a user."""
     if not VAPID_PRIVATE_KEY or not VAPID_CLAIM_EMAIL:
@@ -1690,8 +1692,14 @@ def send_push_notification(user_id, title, body, icon=None, tag=None, data=None)
         from pywebpush import webpush
     except ImportError:
         return
-    # Log key diagnostics for debugging (no secret data)
-    print(f"[push] Key: {VAPID_PRIVATE_KEY.count(chr(10))} newlines, has BEGIN={VAPID_PRIVATE_KEY.count('BEGIN')}, has END={VAPID_PRIVATE_KEY.count('END')}, len={len(VAPID_PRIVATE_KEY)}", file=sys.stderr)
+    global _vapid_instance
+    if _vapid_instance is None:
+        try:
+            from py_vapid import Vapid
+            _vapid_instance = Vapid.from_pem(VAPID_PRIVATE_KEY.encode())
+        except Exception as e:
+            print(f"[push] Failed to load VAPID key: {e}", file=sys.stderr)
+            return
     subs = db.get_user_push_subscriptions(user_id)
     payload = json.dumps({
         "title": title,
@@ -1709,7 +1717,7 @@ def send_push_notification(user_id, title, body, icon=None, tag=None, data=None)
                     "keys": {"p256dh": sub["p256dh_key"], "auth": sub["auth_key"]},
                 },
                 data=payload,
-                vapid_private_key=VAPID_PRIVATE_KEY,
+                vapid_private_key=_vapid_instance,
                 vapid_claims={"sub": VAPID_CLAIM_EMAIL},
             )
         except Exception as e:
