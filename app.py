@@ -803,8 +803,6 @@ def api_admin_trigger_digest():
         ).fetchone()
         yesterday_total = y_row[0] if y_row else 0
         month_total = m_row[0] if m_row else 0
-        if yesterday_total == 0 and month_total == 0:
-            continue
         body_parts = []
         if yesterday_total > 0:
             body_parts.append(f"Yesterday: ৳{yesterday_total:,.0f}")
@@ -817,7 +815,7 @@ def api_admin_trigger_digest():
             data={"type": "daily_digest"},
         )
         sent += 1
-    return jsonify({"sent": sent})
+    return jsonify({"sent": sent, "subscribed": len(user_ids)})
 
 
 # ── API: Learn ──────────────────────────────────────────────
@@ -1770,8 +1768,6 @@ def api_daily_digest():
         ).fetchone()
         yesterday_total = y_row[0] if y_row else 0
         month_total = m_row[0] if m_row else 0
-        if yesterday_total == 0 and month_total == 0:
-            continue
         body_parts = []
         if yesterday_total > 0:
             body_parts.append(f"Yesterday: ৳{yesterday_total:,.0f}")
