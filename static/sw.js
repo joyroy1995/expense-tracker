@@ -75,6 +75,7 @@ self.addEventListener("notificationclick", (event) => {
 });
 
 async function cacheFirst(request) {
+  if (request.method !== "GET") return fetch(request);
   const cached = await caches.match(request);
   if (cached) return cached;
   try {
@@ -92,12 +93,13 @@ async function cacheFirst(request) {
 async function networkFirst(request) {
   try {
     const response = await fetch(request);
-    if (response.ok) {
+    if (response.ok && request.method === "GET") {
       const cache = await caches.open(CACHE);
       cache.put(request, response.clone());
     }
     return response;
   } catch {
+    if (request.method !== "GET") throw new Error("Offline");
     const cached = await caches.match(request);
     if (cached) return cached;
     if (request.mode === "navigate") {
