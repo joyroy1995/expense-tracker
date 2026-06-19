@@ -1,4 +1,4 @@
-const CACHE = "expense-tracker-v3";
+const CACHE = "expense-tracker-v4";
 
 self.addEventListener("install", (event) => {
   self.skipWaiting();
@@ -19,15 +19,14 @@ self.addEventListener("fetch", (event) => {
   const { request } = event;
   const url = new URL(request.url);
 
-  // API calls: network-first (GET only; POST/PUT/DELETE go direct to avoid iOS Safari SW hangs)
-  if (url.pathname.startsWith("/api/")) {
-    if (request.method !== "GET") return;
-    event.respondWith(networkFirst(request));
-    return;
-  }
+  // Never cache API calls — always go to network
+  if (url.pathname.startsWith("/api/")) return;
 
-  // Static assets: cache-first
-  if (/\.(css|js|png|svg|ico|woff2?)$/.test(url.pathname)) {
+  // Never cache JS files — ensures fresh script.js (fixes stale-code bugs on iOS)
+  if (url.pathname.endsWith(".js")) return;
+
+  // Static assets (CSS, images, fonts): cache-first
+  if (/\.(css|png|svg|ico|woff2?)$/.test(url.pathname)) {
     event.respondWith(cacheFirst(request));
     return;
   }
@@ -94,7 +93,7 @@ async function cacheFirst(request) {
 async function networkFirst(request) {
   try {
     const response = await fetch(request);
-    if (response.ok && request.method === "GET") {
+    if (response.ok && request.method === "GET" && !request.url.includes("/api/")) {
       const cache = await caches.open(CACHE);
       cache.put(request, response.clone());
     }

@@ -19,6 +19,10 @@ from config import USERNAME, PASSWORD, SECRET_KEY, CATEGORY_COLORS, TIMEZONE, SE
 
 app = Flask(__name__)
 app.secret_key = SECRET_KEY
+app.config.update(
+    SESSION_COOKIE_SAMESITE='Lax',
+    SESSION_COOKIE_HTTPONLY=True,
+)
 
 
 # ── Close DB connection after each request ─────────────────
