@@ -36,8 +36,25 @@ PASSWORD = os.environ.get("APP_PASSWORD", "admin123")
 
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 
+def _normalize_pem(s):
+    if not s or "-----BEGIN" not in s:
+        return s
+    s = s.replace("\\n", "\n")
+    if "\n" not in s:
+        begin = s.index("-----BEGIN")
+        end = s.index("-----END", begin) + len("-----END-----")
+        header = s[begin:s.index("\n", begin) if "\n" in s[begin:] else begin]
+        # Actually simpler: just reconstruct
+        import re
+        parts = re.split(r"-----.*?-----", s)
+        if len(parts) >= 3:
+            body = parts[1].strip()
+            body = "\n".join(body[i:i+64] for i in range(0, len(body), 64))
+            return f"-----BEGIN PRIVATE KEY-----\n{body}\n-----END PRIVATE KEY-----"
+    return s
+
 VAPID_PUBLIC_KEY = os.environ.get("VAPID_PUBLIC_KEY", "")
-VAPID_PRIVATE_KEY = os.environ.get("VAPID_PRIVATE_KEY", "")
+VAPID_PRIVATE_KEY = _normalize_pem(os.environ.get("VAPID_PRIVATE_KEY", ""))
 VAPID_CLAIM_EMAIL = os.environ.get("VAPID_CLAIM_EMAIL", "mailto:admin@expenses.app")
 VAPID_APPLICATION_SERVER_KEY = os.environ.get("VAPID_APPLICATION_SERVER_KEY", "")
 
