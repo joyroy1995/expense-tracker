@@ -1,4 +1,4 @@
-const CACHE = "expense-tracker-v2";
+const CACHE = "expense-tracker-v3";
 const STATIC_ASSETS = [
   "/",
   "/static/style.css",
