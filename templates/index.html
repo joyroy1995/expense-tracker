@@ -53,9 +53,7 @@
     <script src="{{ url_for('static', filename='script.js') }}"></script>
     <script>
       if ('serviceWorker' in navigator) {
-        window.addEventListener('load', () => {
-          navigator.serviceWorker.register('/static/sw.js');
-        });
+        navigator.serviceWorker.register('/static/sw.js');
       }
     </script>
 </body>

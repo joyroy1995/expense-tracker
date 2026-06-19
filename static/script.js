@@ -2384,7 +2384,9 @@ async function subscribeToPush() {
       endpoint: key.endpoint,
       keys: { p256dh: key.keys.p256dh, auth: key.keys.auth },
     });
-  } catch {}
+  } catch (e) {
+    console.error('subscribeToPush failed:', e);
+  }
 }
 
 async function unsubscribeFromPush() {
@@ -2397,7 +2399,9 @@ async function unsubscribeFromPush() {
       await api.post("/api/notifications/unsubscribe", { endpoint: key.endpoint });
       await subscription.unsubscribe();
     }
-  } catch {}
+  } catch (e) {
+    console.error('unsubscribeFromPush failed:', e);
+  }
 }
 
 // Logout handler
