@@ -3,10 +3,12 @@ let currentUser = null;
 let chartInstances = [];
 
 // ── API Client ──
+const FETCH_OPTS = { credentials: 'include' };
+
 const api = {
   async get(url) {
     try {
-      const res = await fetch(url);
+      const res = await fetch(url, FETCH_OPTS);
       const data = await res.json();
       if (!res.ok) return { ok: false, error: data.error || 'Request failed' };
       return { ok: true, data };
@@ -15,6 +17,7 @@ const api = {
   async post(url, body) {
     try {
       const res = await fetch(url, {
+        ...FETCH_OPTS,
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
@@ -27,6 +30,7 @@ const api = {
   async postForm(url, formData) {
     try {
       const res = await fetch(url, {
+        ...FETCH_OPTS,
         method: 'POST',
         body: formData,
       });
@@ -37,7 +41,7 @@ const api = {
   },
   async del(url) {
     try {
-      const res = await fetch(url, { method: 'DELETE' });
+      const res = await fetch(url, { ...FETCH_OPTS, method: 'DELETE' });
       const data = await res.json();
       if (!res.ok) return { ok: false, error: data.error || 'Request failed' };
       return { ok: true, data };
@@ -46,6 +50,7 @@ const api = {
   async put(url, body) {
     try {
       const res = await fetch(url, {
+        ...FETCH_OPTS,
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
@@ -336,29 +341,34 @@ async function renderLogin() {
   document.getElementById('loginForm').addEventListener('submit', async (e) => {
     e.preventDefault();
     const errEl = document.getElementById('loginError');
-    const username = document.getElementById('loginUsername').value.trim();
-    const password = document.getElementById('loginPassword').value.trim();
-    // Start permission request synchronously (within user gesture)
-    let notifPromise;
-    if ("Notification" in window && Notification.permission === "default") {
-      try { notifPromise = Notification.requestPermission(); } catch {}
-    }
-    const res = await api.post('/api/login', { username, password });
-    if (!res.ok) {
-      errEl.textContent = res.error;
-      errEl.style.display = '';
-      return;
-    }
-    currentUser = res.data;
-    let permission = "denied";
-    if ("Notification" in window) {
-      permission = Notification.permission;
-      if (notifPromise) {
-        try { permission = await notifPromise; } catch {}
+    try {
+      const username = document.getElementById('loginUsername').value.trim();
+      const password = document.getElementById('loginPassword').value.trim();
+      // Start permission request synchronously (within user gesture)
+      let notifPromise;
+      if ("Notification" in window && Notification.permission === "default") {
+        try { notifPromise = Notification.requestPermission(); } catch {}
       }
+      const res = await api.post('/api/login', { username, password });
+      if (!res.ok) {
+        errEl.textContent = res.error;
+        errEl.style.display = '';
+        return;
+      }
+      currentUser = res.data;
+      let permission = "denied";
+      if ("Notification" in window) {
+        permission = Notification.permission;
+        if (notifPromise) {
+          try { permission = await notifPromise; } catch {}
+        }
+      }
+      if (permission === "granted") subscribeToPush();
+      navigate('/');
+    } catch (err) {
+      errEl.textContent = err.message || 'Unexpected error';
+      errEl.style.display = '';
     }
-    if (permission === "granted") subscribeToPush();
-    navigate('/');
   });
 }
 

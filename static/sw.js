@@ -19,8 +19,9 @@ self.addEventListener("fetch", (event) => {
   const { request } = event;
   const url = new URL(request.url);
 
-  // API calls: network-first
+  // API calls: network-first (GET only; POST/PUT/DELETE go direct to avoid iOS Safari SW hangs)
   if (url.pathname.startsWith("/api/")) {
+    if (request.method !== "GET") return;
     event.respondWith(networkFirst(request));
     return;
   }
