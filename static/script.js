@@ -2368,22 +2368,29 @@ function urlB64ToUint8Array(base64String) {
 
 async function subscribeToPush() {
   if (!("Notification" in window) || !("serviceWorker" in navigator)) return;
-  if (Notification.permission === "denied") return;
+  if (Notification.permission === "denied") { console.log('push: permission denied'); return; }
   const permission = await Notification.requestPermission();
-  if (permission !== "granted") return;
+  if (permission !== "granted") { console.log('push: permission not granted:', permission); return; }
   try {
-    const registration = await navigator.serviceWorker.ready;
+    const registration = await Promise.race([
+      navigator.serviceWorker.ready,
+      new Promise((_, rej) => setTimeout(() => rej(new Error('SW ready timed out')), 10000)),
+    ]);
+    console.log('push: SW ready');
     const keyRes = await api.get("/api/notifications/vapid-public-key");
-    if (!keyRes.ok || !keyRes.data?.publicKey) return;
+    if (!keyRes.ok || !keyRes.data?.publicKey) { console.log('push: no public key'); return; }
+    console.log('push: got public key, subscribing...');
     const subscription = await registration.pushManager.subscribe({
       userVisibleOnly: true,
       applicationServerKey: urlB64ToUint8Array(keyRes.data.publicKey),
     });
     const key = subscription.toJSON();
-    await api.post("/api/notifications/subscribe", {
+    console.log('push: subscribed, posting to server...');
+    const res = await api.post("/api/notifications/subscribe", {
       endpoint: key.endpoint,
       keys: { p256dh: key.keys.p256dh, auth: key.keys.auth },
     });
+    console.log('push: server response:', res.ok);
   } catch (e) {
     console.error('subscribeToPush failed:', e);
   }
