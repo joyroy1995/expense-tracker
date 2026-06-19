@@ -338,6 +338,9 @@ async function renderLogin() {
     const errEl = document.getElementById('loginError');
     const username = document.getElementById('loginUsername').value.trim();
     const password = document.getElementById('loginPassword').value.trim();
+    // Start permission request synchronously (within user gesture)
+    const notifPromise = "Notification" in window && Notification.permission === "default"
+      ? Notification.requestPermission() : Promise.resolve(Notification.permission);
     const res = await api.post('/api/login', { username, password });
     if (!res.ok) {
       errEl.textContent = res.error;
@@ -345,7 +348,9 @@ async function renderLogin() {
       return;
     }
     currentUser = res.data;
-    subscribeToPush();
+    // After login, wait for permission decision and subscribe
+    const permission = await notifPromise;
+    if (permission === "granted") subscribeToPush();
     navigate('/');
   });
 }
@@ -389,6 +394,8 @@ async function renderRegister() {
     const username = document.getElementById('regUsername').value.trim();
     const password = document.getElementById('regPassword').value;
     const confirm = document.getElementById('regConfirm').value;
+    const notifPromise = "Notification" in window && Notification.permission === "default"
+      ? Notification.requestPermission() : Promise.resolve(Notification.permission);
     const res = await api.post('/api/register', { username, password, confirm });
     if (!res.ok) {
       errEl.textContent = res.error;
@@ -396,7 +403,8 @@ async function renderRegister() {
       return;
     }
     currentUser = res.data;
-    subscribeToPush();
+    const permission = await notifPromise;
+    if (permission === "granted") subscribeToPush();
     navigate('/');
   });
 }
@@ -2350,7 +2358,9 @@ async function init() {
   const me = await api.get('/api/me');
   if (me.ok) {
     currentUser = me.data;
-    subscribeToPush();
+    if ("Notification" in window && Notification.permission === "granted") {
+      subscribeToPush();
+    }
   }
   // Pre-fetch suggestions for welcome screen
   await fetchSuggestions();
