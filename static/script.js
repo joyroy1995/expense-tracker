@@ -1693,7 +1693,6 @@ function initChatCard() {
   const sendBtn = document.getElementById('chatSendBtn');
   const micBtn = document.getElementById('voiceBtn');
   const attachBtn = document.getElementById('chatAttachBtn');
-  const attachMenu = document.getElementById('chatAttachMenu');
   const chatCameraInput = document.getElementById('chatCameraInput');
   const chatGalleryInput = document.getElementById('chatGalleryInput');
 
@@ -1739,8 +1738,6 @@ function initChatCard() {
   }
 
   // ── Attach button (opens gallery directly) ──
-  const attachBtn = document.getElementById('chatAttachBtn');
-  const chatGalleryInput = document.getElementById('chatGalleryInput');
   if (attachBtn && chatGalleryInput) {
     attachBtn.addEventListener('click', () => chatGalleryInput.click());
   }
