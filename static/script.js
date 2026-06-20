@@ -2268,7 +2268,8 @@ function renderChatMessages() {
           </select>
           <input class="chat-expense-desc" value="${esc(i.description || '')}"
             oninput="updateChatItemDesc(${idx}, ${itemIdx}, this.value)">
-          <span class="chat-expense-amt">৳${(i.amount || 0).toFixed(2)}</span>
+          <span class="chat-expense-amt-prefix">৳</span><input class="chat-expense-amt" type="number" step="0.01" min="0" value="${(i.amount || 0).toFixed(2)}"
+            oninput="updateChatItemAmount(${idx}, ${itemIdx}, this.value)">
         </div>`;
       });
       h += `</div>`;
@@ -2434,6 +2435,13 @@ function updateChatItemDesc(msgIdx, itemIdx, value) {
   const msg = chatMessages[msgIdx];
   if (!msg || msg.type !== 'expense_preview' || !msg.items[itemIdx]) return;
   msg.items[itemIdx].description = value;
+}
+
+function updateChatItemAmount(msgIdx, itemIdx, value) {
+  const msg = chatMessages[msgIdx];
+  if (!msg || msg.type !== 'expense_preview' || !msg.items[itemIdx]) return;
+  const amt = parseFloat(value);
+  msg.items[itemIdx].amount = isNaN(amt) ? 0 : amt;
 }
 
 async function confirmChatExpenses(index) {

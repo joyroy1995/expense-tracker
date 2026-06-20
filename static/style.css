@@ -2258,6 +2258,25 @@ body {
   color: var(--text);
   white-space: nowrap;
   flex-shrink: 0;
+  width: 80px;
+  text-align: right;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  padding: 2px 4px;
+  font-size: 13px;
+  font-family: inherit;
+  background: transparent;
+  outline: none;
+  transition: border-color 0.15s, background 0.15s;
+}
+.chat-expense-amt:focus {
+  border-color: var(--border);
+  background: var(--bg);
+}
+.chat-expense-amt-prefix {
+  font-weight: 600;
+  color: var(--text);
+  flex-shrink: 0;
 }
 .chat-expense-total {
   font-size: 13px;
