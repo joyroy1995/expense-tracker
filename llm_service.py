@@ -1422,23 +1422,26 @@ def _scan_receipt_gemini(image_bytes):
 def scan_receipt(image_bytes):
     """Extract structured data from a receipt image.
     Tries Groq vision first, falls back to Gemini 2.0 Flash.
-    Returns dict with "store", "date", "items" (categorized via extract_expense),
-    or dict with "error" string on failure.
+    Returns dict with "store", "date", "items" (categorized via keyword_category
+    to avoid extra API calls that hit rate limits), or dict with "error".
     """
+    def _categorize_items(items):
+        for item in items:
+            desc = item.get("description", "")
+            item["category"] = keyword_category(desc)
+            if not item.get("amount"):
+                item["amount"] = extract_amount_fallback(desc) or 0
+
     result, error = _scan_receipt_groq(image_bytes)
     if result is not None:
         if result.get("items"):
-            for item in result["items"]:
-                cat_result = extract_expense(item.get("description", ""))
-                item["category"] = cat_result["category"]
+            _categorize_items(result["items"])
             return result
         return {"error": "Receipt detected but no line items found. Try a clearer photo."}
     result, gemini_error = _scan_receipt_gemini(image_bytes)
     if result is not None:
         if result.get("items"):
-            for item in result["items"]:
-                cat_result = extract_expense(item.get("description", ""))
-                item["category"] = cat_result["category"]
+            _categorize_items(result["items"])
             return result
         return {"error": "Receipt detected but no line items found. Try a clearer photo."}
     return {"error": error if error else gemini_error or "No vision API available. Set GROQ_API_KEY or GEMINI_API_KEY."}
