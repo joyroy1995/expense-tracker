@@ -1732,8 +1732,52 @@ body {
   margin-bottom: 24px;
 }
 
+.card-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.chat-clear-btn {
+  background: none;
+  border: none;
+  font-size: 20px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  padding: 0 4px;
+  line-height: 1;
+  border-radius: 4px;
+  transition: color 0.15s, background 0.15s;
+}
+
+.chat-clear-btn:hover {
+  color: var(--error);
+  background: var(--bg);
+}
+
+.collapse-icon {
+  font-size: 12px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  user-select: none;
+  padding: 4px;
+  border-radius: 4px;
+  transition: color 0.15s, background 0.15s;
+}
+
+.collapse-icon:hover {
+  color: var(--text);
+  background: var(--bg);
+}
+
 .ai-icon {
   font-size: 20px;
+}
+
+.ai-chat-card .card-header-row {
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 0;
 }
 
 .chat-body {

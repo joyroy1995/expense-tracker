@@ -567,22 +567,31 @@ async function renderHome(page = 1) {
     ${renderBudgetAlerts(d.budget_alerts)}
 
     <div class="ai-chat-card" id="aiChatCard">
-      <div class="chat-messages" id="chatMessages"></div>
-      <div class="chat-input-area">
-        <div class="chat-attach-wrap">
-          <button id="chatAttachBtn" class="chat-icon-btn" title="Attach file">📎</button>
-          <div id="chatAttachMenu" class="chat-attach-menu" style="display:none">
-            <button data-action="camera">📷 Camera</button>
-            <button data-action="gallery">🖼 Gallery</button>
-            <button data-action="clear" id="chatClearBtn">🗑 Clear chat</button>
-          </div>
+      <div class="card-header-row" id="aiChatToggle" style="cursor:pointer;">
+        <span style="font-weight:600;font-size:15px;"><span class="ai-icon">🤖</span> Ask AI</span>
+        <div class="card-header-actions" style="display:flex;align-items:center;gap:8px;">
+          <button class="chat-clear-btn" id="chatClearBtn" title="Clear chat">&times;</button>
+          <span class="collapse-icon" id="aiChatCollapseIcon">▼</span>
         </div>
-        <input type="file" id="chatCameraInput" accept="image/*" capture="environment" style="display:none">
-        <input type="file" id="chatGalleryInput" accept="image/*" style="display:none">
-        <div class="chat-input-inner">
-          <textarea id="chatInput" rows="1" placeholder="Ask a question..." autocomplete="off"></textarea>
-          <button id="voiceBtn" class="chat-input-btn" title="Voice input">🎤</button>
-          <button id="chatSendBtn" class="chat-input-btn" title="Send" style="display:none"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg></button>
+      </div>
+      <div id="aiChatBody" class="chat-body">
+        <div class="chat-messages" id="chatMessages"></div>
+        <div class="chat-input-area">
+          <div class="chat-attach-wrap">
+            <button id="chatAttachBtn" class="chat-icon-btn" title="Attach file">📎</button>
+            <div id="chatAttachMenu" class="chat-attach-menu" style="display:none">
+              <button data-action="camera">📷 Camera</button>
+              <button data-action="gallery">🖼 Gallery</button>
+              <button data-action="clear" id="chatClearMenuBtn">🗑 Clear chat</button>
+            </div>
+          </div>
+          <input type="file" id="chatCameraInput" accept="image/*" capture="environment" style="display:none">
+          <input type="file" id="chatGalleryInput" accept="image/*" style="display:none">
+          <div class="chat-input-inner">
+            <textarea id="chatInput" rows="1" placeholder="Ask a question..." autocomplete="off"></textarea>
+            <button id="voiceBtn" class="chat-input-btn" title="Voice input">🎤</button>
+            <button id="chatSendBtn" class="chat-input-btn" title="Send" style="display:none"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg></button>
+          </div>
         </div>
       </div>
     </div>
@@ -1753,6 +1762,38 @@ function initChatCard() {
       });
     });
     document.addEventListener('click', () => { attachMenu.style.display = 'none'; });
+  }
+
+  // ── Collapse / expand ──
+  const toggle = document.getElementById('aiChatToggle');
+  const body = document.getElementById('aiChatBody');
+  const icon = document.getElementById('aiChatCollapseIcon');
+  if (toggle && body && icon) {
+    const saved = localStorage.getItem('aiChatCollapsed');
+    const isMobile = window.innerWidth <= 768;
+    const collapsed = saved !== null ? saved === 'true' : isMobile;
+    if (collapsed) {
+      body.classList.add('chat-body-collapsed');
+      icon.textContent = '▶';
+    } else {
+      body.classList.remove('chat-body-collapsed');
+      icon.textContent = '▼';
+    }
+    toggle.addEventListener('click', () => {
+      body.classList.toggle('chat-body-collapsed');
+      const c = body.classList.contains('chat-body-collapsed');
+      icon.textContent = c ? '▶' : '▼';
+      localStorage.setItem('aiChatCollapsed', c);
+    });
+  }
+
+  // ── Clear button ──
+  const clearBtn = document.getElementById('chatClearBtn');
+  if (clearBtn) {
+    clearBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      clearChatMessages();
+    });
   }
 
   chatCameraInput?.addEventListener('change', (e) => {
