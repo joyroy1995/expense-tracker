@@ -589,7 +589,7 @@ async function renderHome(page = 1) {
     <div class="main-grid">
       <div class="card add-expense-card">
         <h2 class="card-title">Add Expense</h2>
-        <form id="expenseForm" class="expense-form">
+        <form id="expenseForm" class="expense-form" novalidate>
           <div class="form-row">
             <div class="form-group form-date">
               <label for="date">Date</label>
