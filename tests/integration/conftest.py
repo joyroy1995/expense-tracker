@@ -1,28 +1,30 @@
 import os
 import pytest
 from unittest.mock import MagicMock, patch
+from config import DATABASE_URL as _orig_db_url, DATABASE_PATH as _orig_db_path
 import database as db
+from database import engine as _db_engine
 from app import app as _flask_app
 
 
 @pytest.fixture(autouse=True)
 def reset_db():
-    old_url = db.DATABASE_URL
-    old_path = db.DATABASE_PATH
-    old_engine = db._engine
-    old_init = db._db_init_done
+    old_url = _orig_db_url
+    old_path = _orig_db_path
+    old_engine = _db_engine._engine
+    old_init = _db_engine._db_init_done
 
-    db.DATABASE_URL = ""
-    db.DATABASE_PATH = ":memory:"
-    db._engine = None
-    db._db_init_done = False
+    _db_engine.DATABASE_URL = ""
+    _db_engine.DATABASE_PATH = ":memory:"
+    _db_engine._engine = None
+    _db_engine._db_init_done = False
 
     yield
 
-    db.DATABASE_URL = old_url
-    db.DATABASE_PATH = old_path
-    db._engine = old_engine
-    db._db_init_done = old_init
+    _db_engine.DATABASE_URL = old_url
+    _db_engine.DATABASE_PATH = old_path
+    _db_engine._engine = old_engine
+    _db_engine._db_init_done = old_init
 
 
 @pytest.fixture
