@@ -566,22 +566,36 @@ async function renderHome(page = 1) {
 
     ${renderBudgetAlerts(d.budget_alerts)}
 
-    <div class="card ai-chat-card" id="aiChatCard">
-      <div class="card-header-row" id="aiChatToggle" style="cursor:pointer;">
-        <h2 class="card-title" style="margin-bottom:0;">
-          <span class="ai-icon">🤖</span> Ask AI
-        </h2>
-        <div class="card-header-actions" style="display:flex;align-items:center;gap:8px;">
-          <button class="chat-clear-btn" id="chatClearBtn" title="Clear chat">&times;</button>
-          <span class="collapse-icon" id="aiChatCollapseIcon">▼</span>
+    <div class="ai-chat-card" id="aiChatCard">
+      <div class="chat-messages" id="chatMessages"></div>
+      <div class="chat-input-area">
+        <div class="chat-attach-wrap">
+          <button id="chatAttachBtn" class="chat-icon-btn" title="Attach file">📎</button>
+          <div id="chatAttachMenu" class="chat-attach-menu" style="display:none">
+            <button data-action="camera">📷 Camera</button>
+            <button data-action="gallery">🖼 Gallery</button>
+          </div>
+        </div>
+        <input type="file" id="chatCameraInput" accept="image/*" capture="environment" style="display:none">
+        <input type="file" id="chatGalleryInput" accept="image/*" style="display:none">
+        <div class="chat-input-inner">
+          <textarea id="chatInput" rows="1" placeholder="Ask a question..." autocomplete="off"></textarea>
+          <button id="voiceBtn" class="chat-input-btn" title="Voice input">🎤</button>
+          <button id="chatSendBtn" class="chat-input-btn" title="Send" style="display:none"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg></button>
         </div>
       </div>
-      <div id="aiChatBody" class="chat-body">
-        <div class="chat-messages" id="chatMessages"></div>
-        <div class="chat-input-area">
-          <input type="text" id="chatInput" placeholder="Ask a question..." autocomplete="off">
-          <button id="voiceBtn" class="voice-btn" title="Voice input">🎤</button>
-          <button id="chatSendBtn" class="btn btn-primary" onclick="sendChatMessage()">Send</button>
+    </div>
+
+    <div id="cropModal" class="crop-modal" style="display:none">
+      <div class="crop-modal-backdrop"></div>
+      <div class="crop-modal-content">
+        <div class="crop-image-wrap">
+          <img id="cropImage" src="" alt="Crop receipt">
+          <div class="crop-selection" id="cropSelection"></div>
+        </div>
+        <div class="crop-modal-actions">
+          <button type="button" class="btn btn-outline" id="cropCancelBtn">Cancel</button>
+          <button type="button" class="btn btn-primary" id="cropConfirmBtn">Crop & Scan</button>
         </div>
       </div>
     </div>
@@ -1687,35 +1701,23 @@ function handleAuthError(res) {
 let chatMessages = [];
 
 function initChatCard() {
-  const toggle = document.getElementById('aiChatToggle');
   const input = document.getElementById('chatInput');
-  const clearBtn = document.getElementById('chatClearBtn');
-  const body = document.getElementById('aiChatBody');
-  const icon = document.getElementById('aiChatCollapseIcon');
+  const sendBtn = document.getElementById('chatSendBtn');
+  const micBtn = document.getElementById('voiceBtn');
+  const attachBtn = document.getElementById('chatAttachBtn');
+  const attachMenu = document.getElementById('chatAttachMenu');
+  const chatCameraInput = document.getElementById('chatCameraInput');
+  const chatGalleryInput = document.getElementById('chatGalleryInput');
+  const cropModal = document.getElementById('cropModal');
+  const cropImage = document.getElementById('cropImage');
+  const cropSelection = document.getElementById('cropSelection');
+  const cropCancelBtn = document.getElementById('cropCancelBtn');
+  const cropConfirmBtn = document.getElementById('cropConfirmBtn');
 
-  // Restore collapse state from localStorage (mobile defaults to collapsed)
-  if (body && icon) {
-    const saved = localStorage.getItem('aiChatCollapsed');
-    const isMobile = window.innerWidth <= 768;
-    const collapsed = saved !== null ? saved === 'true' : isMobile;
-    if (collapsed) {
-      body.classList.add('chat-body-collapsed');
-      icon.textContent = '▶';
-    } else {
-      body.classList.remove('chat-body-collapsed');
-      icon.textContent = '▼';
-    }
-  }
-
-  if (toggle) {
-    toggle.addEventListener('click', () => {
-      if (body && icon) {
-        body.classList.toggle('chat-body-collapsed');
-        const collapsed = body.classList.contains('chat-body-collapsed');
-        icon.textContent = collapsed ? '▶' : '▼';
-        localStorage.setItem('aiChatCollapsed', collapsed);
-      }
-    });
+  function toggleInputButtons() {
+    const hasText = input && input.value.trim().length > 0;
+    if (micBtn) micBtn.style.display = hasText ? 'none' : 'flex';
+    if (sendBtn) sendBtn.style.display = hasText ? 'flex' : 'none';
   }
 
   if (input) {
@@ -1725,28 +1727,25 @@ function initChatCard() {
         sendChatMessage();
       }
     });
-  }
-
-  if (clearBtn) {
-    clearBtn.addEventListener('click', () => {
-      chatMessages = [];
-      const container = document.getElementById('chatMessages');
-      if (container) {
-        container.innerHTML = getWelcomeHtml();
-      }
-      const ci = document.getElementById('chatInput');
-      if (ci) ci.focus();
+    input.addEventListener('input', () => {
+      input.style.height = 'auto';
+      input.style.height = Math.min(input.scrollHeight, 200) + 'px';
+      toggleInputButtons();
     });
+    toggleInputButtons();
   }
 
-  const voiceBtn = document.getElementById('voiceBtn');
-  if (voiceBtn) {
+  if (sendBtn) {
+    sendBtn.addEventListener('click', sendChatMessage);
+  }
+
+  if (micBtn) {
     const hasNativeSpeech = !!(window.SpeechRecognition || window.webkitSpeechRecognition);
     const hasMediaRecorder = !!(navigator.mediaDevices?.getUserMedia);
     if (!hasNativeSpeech && !hasMediaRecorder) {
-      voiceBtn.style.display = 'none';
+      micBtn.style.display = 'none';
     } else {
-      voiceBtn.addEventListener('click', () => {
+      micBtn.addEventListener('click', () => {
         if (voiceRecognition || voiceMediaRecorder) {
           stopVoiceInput();
         } else {
@@ -1755,6 +1754,189 @@ function initChatCard() {
       });
     }
   }
+
+  // ── Attach button (camera / gallery) ──
+  if (attachBtn && attachMenu) {
+    attachBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      attachMenu.style.display = attachMenu.style.display !== 'none' ? 'none' : 'block';
+    });
+    attachMenu.querySelectorAll('button').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        attachMenu.style.display = 'none';
+        if (btn.dataset.action === 'camera') chatCameraInput?.click();
+        else if (btn.dataset.action === 'gallery') chatGalleryInput?.click();
+      });
+    });
+    document.addEventListener('click', () => { attachMenu.style.display = 'none'; });
+  }
+
+  chatCameraInput?.addEventListener('change', (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (file) openChatScan(file);
+  });
+  chatGalleryInput?.addEventListener('change', (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (file) openChatScan(file);
+  });
+
+  // ── Crop modal ──
+  let cropFile = null;
+  let cropStartX, cropStartY, cropEndX, cropEndY;
+  let cropDragging = false;
+  let cropEventsSetup = false;
+
+  function openCropModal(file) {
+    cropFile = file;
+    const reader = new FileReader();
+    reader.onload = () => {
+      cropImage.src = reader.result;
+      cropModal.style.display = 'flex';
+      cropSelection.style.display = 'none';
+    };
+    reader.readAsDataURL(file);
+  }
+
+  function closeCropModal() {
+    cropModal.style.display = 'none';
+    cropImage.src = '';
+    cropFile = null;
+  }
+
+  cropCancelBtn?.addEventListener('click', closeCropModal);
+
+  cropConfirmBtn?.addEventListener('click', async () => {
+    if (!cropFile || !cropImage.naturalWidth) return;
+    const rect = cropSelection.style.display !== 'none'
+      ? { x: Math.min(cropStartX, cropEndX), y: Math.min(cropStartY, cropEndY), w: Math.abs(cropEndX - cropStartX), h: Math.abs(cropEndY - cropStartY) }
+      : null;
+    closeCropModal();
+    const scaleX = cropImage.naturalWidth / cropImage.offsetWidth;
+    const scaleY = cropImage.naturalHeight / cropImage.offsetHeight;
+    if (rect && rect.w > 5 && rect.h > 5) {
+      rect.x = Math.round(rect.x * scaleX);
+      rect.y = Math.round(rect.y * scaleY);
+      rect.w = Math.round(rect.w * scaleX);
+      rect.h = Math.round(rect.h * scaleY);
+    }
+    await chatScanReceipt(cropFile, rect);
+  });
+
+  if (!cropEventsSetup && cropImage) {
+    cropEventsSetup = true;
+    const wrap = cropImage.parentElement;
+    const clearEvents = () => { cropDragging = false; };
+
+    function getCropPos(e) {
+      const r = wrap.getBoundingClientRect();
+      const pt = e.touches ? { x: e.touches[0].clientX, y: e.touches[0].clientY } : { x: e.clientX, y: e.clientY };
+      return { x: pt.x - r.left, y: pt.y - r.top };
+    }
+
+    function updateCropSelection() {
+      const x = Math.min(cropStartX, cropEndX);
+      const y = Math.min(cropStartY, cropEndY);
+      const w = Math.abs(cropEndX - cropStartX);
+      const h = Math.abs(cropEndY - cropStartY);
+      cropSelection.style.left = x + 'px';
+      cropSelection.style.top = y + 'px';
+      cropSelection.style.width = w + 'px';
+      cropSelection.style.height = h + 'px';
+    }
+
+    const startDrag = (e) => {
+      e.preventDefault();
+      cropDragging = true;
+      const p = getCropPos(e);
+      cropStartX = cropEndX = p.x;
+      cropStartY = cropEndY = p.y;
+      cropSelection.style.display = 'block';
+      updateCropSelection();
+    };
+
+    const moveDrag = (e) => {
+      if (!cropDragging) return;
+      e.preventDefault();
+      const p = getCropPos(e);
+      cropEndX = Math.max(0, Math.min(p.x, wrap.offsetWidth));
+      cropEndY = Math.max(0, Math.min(p.y, wrap.offsetHeight));
+      updateCropSelection();
+    };
+
+    wrap.addEventListener('mousedown', startDrag);
+    document.addEventListener('mousemove', moveDrag);
+    document.addEventListener('mouseup', clearEvents);
+    wrap.addEventListener('touchstart', startDrag, { passive: false });
+    document.addEventListener('touchmove', moveDrag, { passive: false });
+    document.addEventListener('touchend', clearEvents);
+  }
+}
+
+function openChatScan(file) {
+  const cropModal = document.getElementById('cropModal');
+  const cropImage = document.getElementById('cropImage');
+  const cropSelection = document.getElementById('cropSelection');
+  if (!cropModal || !cropImage) return;
+
+  const reader = new FileReader();
+  reader.onload = () => {
+    cropImage.src = reader.result;
+    cropModal.style.display = 'flex';
+    cropSelection.style.display = 'none';
+  };
+  reader.readAsDataURL(file);
+}
+
+async function chatScanReceipt(file, cropRect) {
+  stopVoiceInput();
+
+  let imageFile;
+  if (cropRect) {
+    const img = new Image();
+    img.src = URL.createObjectURL(file);
+    await new Promise(r => { img.onload = r; });
+    const canvas = document.createElement('canvas');
+    canvas.width = cropRect.w;
+    canvas.height = cropRect.h;
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(img, cropRect.x, cropRect.y, cropRect.w, cropRect.h, 0, 0, cropRect.w, cropRect.h);
+    URL.revokeObjectURL(img.src);
+    const blob = await new Promise(r => canvas.toBlob(r, 'image/jpeg', 0.85));
+    imageFile = new File([blob], 'receipt-cropped.jpg', { type: 'image/jpeg' });
+  } else {
+    imageFile = file;
+  }
+
+  const compressed = await compressImage(imageFile, 1200, 0.7);
+
+  addChatMessage('loading', '');
+  const formData = new FormData();
+  formData.append('image', compressed, 'receipt.jpg');
+  const res = await api.postForm('/api/scan_receipt', formData);
+
+  chatMessages = chatMessages.filter(m => m.type !== 'loading');
+  renderChatMessages();
+
+  if (!res.ok || !res.data?.items?.length) {
+    showToast('Scan failed: ' + (res.data?.error || res.error || 'Could not read receipt'), 'error');
+    return;
+  }
+
+  const items = res.data.items;
+  const text = items.map(i => `${i.description} ৳${Number(i.amount).toFixed(2)}`).join(', ');
+  const total = items.reduce((s, i) => s + Number(i.amount || 0), 0);
+  const message = `Scanned receipt: ${text} (Total: ৳${total.toFixed(2)})`;
+
+  const input = document.getElementById('chatInput');
+  if (input) {
+    input.value = message;
+    input.style.height = 'auto';
+    input.style.height = Math.min(input.scrollHeight, 200) + 'px';
+  }
+  sendChatMessage();
 }
 
 let voiceRecognition = null;
