@@ -15,8 +15,11 @@ _COMPOUND_INDICATORS = [
 
 
 def is_question(text):
-    first = text.strip().lower().split(maxsplit=1)[0].rstrip("?,.")
-    return first in _QUESTION_WORDS or text.strip().endswith("?")
+    stripped = text.strip()
+    if not stripped:
+        return False
+    first = stripped.lower().split(maxsplit=1)[0].rstrip("?,.")
+    return first in _QUESTION_WORDS or stripped.endswith("?")
 
 
 def _is_compound_question(question):
