@@ -363,7 +363,6 @@ async function renderLogin() {
           try { permission = await notifPromise; } catch {}
         }
       }
-      if (permission === "granted") subscribeToPush();
       navigate('/');
     } catch (err) {
       errEl.textContent = err.message || 'Unexpected error';
@@ -426,7 +425,6 @@ async function renderRegister() {
         permission = Notification.permission;
       }
     }
-    if (permission === "granted") subscribeToPush();
     navigate('/');
   });
 }
