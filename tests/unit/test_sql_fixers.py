@@ -1,27 +1,29 @@
 import re
 import pytest
-from app import (
-    _validate_sql,
-    _ensure_user_filter,
-    _fix_category_in_sql,
-    _fix_sort_order,
-    _fix_sort_column,
-    _fix_frequency_sql,
-    _fix_top_n_limit,
-    _fix_limit_syntax,
-    _fix_ordinal_limit,
-    _fix_most_expensive_sql,
-    _fix_category_breakdown_sql,
-    _fix_history_id_filter,
-    _fix_date_filter,
-    _fix_show_expenses_aggregate,
-    _extract_item_keyword,
-    _fix_description_filter,
-    _fix_aggregate_sql,
-    _fix_budget_query,
-    _normalize_question,
-    _needs_llm_answer,
-)
+from services.sql_service import SqlService
+from services.qa_service import QaService
+
+
+_validate_sql = SqlService.validate_sql
+_ensure_user_filter = SqlService.ensure_user_filter
+_fix_category_in_sql = SqlService.fix_category_in_sql
+_fix_sort_order = SqlService.fix_sort_order
+_fix_sort_column = SqlService.fix_sort_column
+_fix_frequency_sql = SqlService.fix_frequency_sql
+_fix_top_n_limit = SqlService.fix_top_n_limit
+_fix_limit_syntax = SqlService.fix_limit_syntax
+_fix_ordinal_limit = SqlService.fix_ordinal_limit
+_fix_most_expensive_sql = SqlService.fix_most_expensive_sql
+_fix_category_breakdown_sql = SqlService.fix_category_breakdown_sql
+_fix_history_id_filter = SqlService.fix_history_id_filter
+_fix_date_filter = SqlService.fix_date_filter
+_fix_show_expenses_aggregate = SqlService.fix_show_expenses_aggregate
+_extract_item_keyword = SqlService._extract_item_keyword
+_fix_description_filter = SqlService.fix_description_filter
+_fix_aggregate_sql = SqlService.fix_aggregate_sql
+_fix_budget_query = SqlService.fix_budget_query
+_normalize_question = QaService.normalize_question
+_needs_llm_answer = QaService.needs_llm_answer
 
 
 # ── _validate_sql ─────────────────────────────────────────────
@@ -366,10 +368,10 @@ class TestFixDateFilter:
         assert "LIKE" in result
 
     def test_today_keyword(self, mocker):
-        mocker.patch("app.datetime")
+        mocker.patch("services.sql_service.datetime")
         from datetime import datetime
-        app_datetime = __import__("app").datetime
-        app_datetime.now.return_value.strftime.return_value = "2025-06-20"
+        svc_datetime = __import__("services.sql_service", fromlist=["datetime"]).datetime
+        svc_datetime.now.return_value.strftime.return_value = "2025-06-20"
         sql = "SELECT * FROM expenses WHERE user_id = :uid AND date LIKE '2025-06%'"
         result = _fix_date_filter(sql, "today expenses")
         assert "date = '" in result

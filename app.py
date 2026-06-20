@@ -1,6 +1,5 @@
 import os
-import base64
-from flask import Flask, render_template, request, redirect, url_for, session, jsonify
+from flask import Flask, render_template, request, session, jsonify
 from functools import wraps
 from datetime import datetime, timedelta, date
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -8,14 +7,13 @@ import re
 import random
 import calendar
 import json
-import sys
 import database as db
-from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
-from cryptography.hazmat.backends import default_backend
-from cryptography.hazmat.primitives import serialization
-from llm import extract_expense, predict_expense, extract_keywords, generate_sql, correct_sql, answer_from_results, format_answer, split_expenses, _clean_split_desc, extract_date_reference, clean_date_refs, detect_budget_intent, is_question, transcribe_audio, decompose_question, compose_answers, generate_forecast, scan_receipt
 from database import _ALL_CATEGORIES
-from config import USERNAME, PASSWORD, SECRET_KEY, CATEGORY_COLORS, TIMEZONE, SEED_CATEGORIES, VAPID_PRIVATE_KEY, VAPID_CLAIM_EMAIL
+from llm import extract_expense, predict_expense, extract_keywords, split_expenses, _clean_split_desc, extract_date_reference, clean_date_refs, detect_budget_intent, is_question, transcribe_audio, scan_receipt, generate_forecast
+from config import SECRET_KEY, CATEGORY_COLORS, TIMEZONE
+from services.sql_service import SqlService
+from services.qa_service import QaService
+from services.notification_service import NotificationService
 
 app = Flask(__name__)
 app.secret_key = SECRET_KEY
@@ -68,487 +66,8 @@ def superuser_required(f):
     return decorated_function
 
 
-# ── SQL safety validation ─────────────────────────────────
-
-# Known tables and columns for schema validation
-_KNOWN_TABLES = {"expenses", "users", "budgets", "learned_categories", "password_resets"}
-_KNOWN_COLUMNS = {
-    "expenses": {"id", "date", "description", "amount", "category", "user_id", "created_at"},
-    "users": {"id", "username", "password_hash", "role", "created_at"},
-    "budgets": {"id", "user_id", "category", "amount", "created_at", "updated_at"},
-}
-
-
-def _validate_sql(sql):
-    s = sql.strip()
-    while s.endswith(";"):
-        s = s[:-1].strip()
-    # Reject multiple statements (semicolons within the query)
-    if ";" in s:
-        return False
-    if not s.upper().startswith("SELECT"):
-        return False
-    if "--" in s or "/*" in s or "*/" in s:
-        return False
-    forbidden = {"DROP", "DELETE", "INSERT", "UPDATE", "ALTER", "CREATE", "TRUNCATE", "REPLACE", "EXEC"}
-    words = re.findall(r'\b\w+\b', s.upper())
-    for word in words:
-        if word in forbidden:
-            return False
-
-    # Basic paren balancing
-    if s.count("(") != s.count(")"):
-        return False
-
-    # Check referenced tables exist in known schema
-    # Match table names after FROM/JOIN (excluding subqueries)
-    table_refs = re.findall(r'(?:FROM|JOIN)\s+(\w+)', s, re.IGNORECASE)
-    for t in table_refs:
-        if t.lower() not in _KNOWN_TABLES:
-            return False
-
-    return True
-
-
-def _ensure_user_filter(sql):
-    if ":uid" in sql:
-        return sql
-    clauses = ["ORDER BY", "GROUP BY", "LIMIT", "HAVING"]
-    sql_upper = sql.upper()
-    insert_pos = len(sql)
-    for clause in clauses:
-        pos = sql_upper.find(clause)
-        if pos != -1 and pos < insert_pos:
-            insert_pos = pos
-    prefix = sql[:insert_pos].upper()
-    if "WHERE" in prefix:
-        return sql[:insert_pos] + " AND user_id = :uid " + sql[insert_pos:]
-    return sql[:insert_pos] + " WHERE user_id = :uid " + sql[insert_pos:]
-
-
-def _fix_category_in_sql(sql, question):
-    """Post-process generated SQL to fix wrong or missing category filters.
-    Also strips spurious category filters when the question doesn't mention
-    any category (e.g. contamination carried over from conversation history)."""
-    question_lower = question.lower()
-    mentioned = None
-    for cat in sorted(_ALL_CATEGORIES, key=len, reverse=True):
-        if cat.lower() in question_lower:
-            mentioned = cat
-            break
-    if not mentioned:
-        # No category mentioned — strip any spurious category filter
-        # that may have been carried over from history.
-        # Preserve __overall__ (budget pseudo-category).
-        if re.search(r"(?:b\.)?category\s*=\s*'__overall__'", sql, re.IGNORECASE):
-            return sql
-        sql = re.sub(
-            r'\s+AND\s+(?:b\.)?category\s*=\s*\'[^\']*\'',
-            '', sql, flags=re.IGNORECASE,
-        )
-        sql = re.sub(
-            r'\s+WHERE\s+(?:b\.)?category\s*=\s*\'[^\']*\' AND ',
-            ' WHERE ', sql, flags=re.IGNORECASE,
-        )
-        return sql
-    m = re.search(r"(?:b\.)?category\s*=\s*'([^']+)'", sql)
-    if not m:
-        # Question mentions a category but SQL has no category filter — add one
-        insert_at = len(sql)
-        for kw in [' GROUP BY ', ' ORDER BY ', ' LIMIT ', ' OFFSET ', ' HAVING ']:
-            pos = sql.upper().find(kw)
-            if pos != -1 and pos < insert_at:
-                insert_at = pos
-        sql = sql[:insert_at] + f" AND category = '{mentioned}'" + sql[insert_at:]
-        return sql
-    sql_cat = m.group(1)
-    if sql_cat == mentioned or sql_cat == "__overall__":
-        return sql
-    sql = sql.replace(f"category = '{sql_cat}'", f"category = '{mentioned}'", 1)
-    # Also fix b.category if present
-    sql = sql.replace(f"b.category = '{sql_cat}'", f"b.category = '{mentioned}'", 1)
-    return sql
-
-
-def _fix_sort_order(sql, question):
-    """Post-process SQL to add DESC when question asks for descending order."""
-    if not re.search(r'\b(?:descending|desc|newest\s*first|reverse)\b', question, re.IGNORECASE):
-        return sql
-    sql_upper = sql.upper()
-    idx = sql_upper.find('ORDER BY')
-    if idx == -1:
-        return sql
-    rest = sql_upper[idx + 9:]
-    if 'DESC' in rest:
-        return sql
-    insert_pos = len(sql)
-    for kw in ['LIMIT', 'OFFSET', 'HAVING']:
-        pos = rest.find(kw)
-        if pos != -1 and (idx + 9 + pos) < insert_pos:
-            insert_pos = idx + 9 + pos
-    return sql[:insert_pos] + ' DESC ' + sql[insert_pos:].lstrip()
-
-
-_SORT_COL_MAP = {
-    'amount': 'amount', 'money': 'amount', 'spending': 'amount', 'cost': 'amount',
-    'date': 'date', 'day': 'date', 'time': 'date',
-    'category': 'category',
-    'description': 'description', 'name': 'description', 'item': 'description',
-}
-
-
-def _fix_sort_column(sql, question):
-    """Fix ORDER BY column when question explicitly says 'sort by X'."""
-    m = re.search(r'(?:sort|order)\s+by\s+(\w+)', question, re.IGNORECASE)
-    if not m:
-        return sql
-    col = m.group(1).lower()
-    col = _SORT_COL_MAP.get(col)
-    if not col:
-        return sql
-    if not re.search(r'ORDER\s+BY', sql, re.IGNORECASE):
-        return sql
-    sql = re.sub(
-        r'ORDER\s+BY\s+\w+(\s+(?:ASC|DESC))?',
-        f'ORDER BY {col} DESC',
-        sql,
-        flags=re.IGNORECASE,
-    )
-    return sql
-
-
-def _fix_frequency_sql(sql, question):
-    """Post-process SQL to use COUNT(*) instead of SUM when user asks about frequency."""
-    if not re.search(r'\b(?:frequency|how\s+many\s+times|how\s+often|most\s+frequent|most\s+used|use\s+the\s+most|used\s+the\s+most|count)\b', question, re.IGNORECASE):
-        return sql
-    sql_upper = sql.upper()
-    # Only modify if the SQL uses SUM(amount) or SUM with a category GROUP BY
-    if 'SUM' not in sql_upper and 'GROUP BY' not in sql_upper:
-        return sql
-    if 'COUNT(*)' in sql_upper or 'COUNT(1)' in sql_upper:
-        return sql
-    # Replace SUM(amount) 0 as total with COUNT(*) as count
-    sql = re.sub(
-        r'COALESCE\(\s*SUM\(\s*amount\s*\)\s*,\s*0\s*\)\s+as\s+total',
-        'COUNT(*) as count',
-        sql,
-        flags=re.IGNORECASE
-    )
-    sql = re.sub(
-        r'SUM\(\s*amount\s*\)\s+as\s+total',
-        'COUNT(*) as count',
-        sql,
-        flags=re.IGNORECASE
-    )
-    # Fix ORDER BY: total DESC → count DESC
-    sql = re.sub(r'ORDER\s+BY\s+total\s+DESC', 'ORDER BY count DESC', sql, flags=re.IGNORECASE)
-    return sql
-
-
-def _fix_top_n_limit(sql, question):
-    """Fix LIMIT clause when question explicitly says 'top N' / 'last N' / 'N expenses'.
-    Skips when N refers to a time period (e.g. 'last 7 days') rather than row count."""
-    m = re.search(r'\b(top|last|first)\s+(\d+)\b', question, re.IGNORECASE)
-    if not m:
-        return sql
-    # If followed by a time unit, it's a time period, not a row limit
-    rest = question[m.end():].strip()
-    if re.match(r'\b(day|days|week|weeks|month|months|year|years|hour|hours)\b', rest, re.IGNORECASE):
-        return sql
-    n = int(m.group(2))
-    if 'LIMIT' in sql.upper():
-        sql = re.sub(r'LIMIT\s+\d+', f'LIMIT {n}', sql, flags=re.IGNORECASE)
-    return sql
-
-
-def _fix_limit_syntax(sql, question):
-    """Convert MySQL-style LIMIT a,b to PostgreSQL-compatible LIMIT b OFFSET a."""
-    m = re.search(r'LIMIT\s+(\d+)\s*,\s*(\d+)', sql, re.IGNORECASE)
-    if not m:
-        return sql
-    offset = m.group(1)
-    limit = m.group(2)
-    return sql[:m.start()] + f'LIMIT {limit} OFFSET {offset}' + sql[m.end():]
-
-
-_ORDINAL_MAP = {
-    'second': 2, 'third': 3, 'fourth': 4, 'fifth': 5,
-    'sixth': 6, 'seventh': 7, 'eighth': 8, 'ninth': 9, 'tenth': 10,
-}
-
-
-def _fix_ordinal_limit(sql, question):
-    """Fix LIMIT+OFFSET when question asks for 'second most expensive' etc."""
-    m = re.search(r'\b(second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|\d+(?:st|nd|rd|th))\b', question, re.IGNORECASE)
-    if not m:
-        return sql
-    word = m.group(1).lower()
-    if word in _ORDINAL_MAP:
-        n = _ORDINAL_MAP[word]
-    else:
-        n = int(re.sub(r'[^\d]', '', word))
-    offset_val = n - 1
-    singular = bool(re.search(r'\b(item|expense|transaction|purchase)\b', question, re.IGNORECASE) and
-                    not re.search(r'\b(items|expenses|transactions|purchases)\b', question, re.IGNORECASE))
-    if 'OFFSET' in sql.upper():
-        if singular:
-            sql = re.sub(r'LIMIT\s+\d+', 'LIMIT 1', sql, flags=re.IGNORECASE)
-        sql = re.sub(r'OFFSET\s+\d+', f'OFFSET {offset_val}', sql, flags=re.IGNORECASE)
-    else:
-        if 'LIMIT' in sql.upper():
-            if singular:
-                sql = re.sub(r'LIMIT\s+\d+', f'LIMIT 1 OFFSET {offset_val}', sql, flags=re.IGNORECASE)
-            else:
-                sql = re.sub(r'LIMIT\s+\d+', f'LIMIT 50 OFFSET {offset_val}', sql, flags=re.IGNORECASE)
-        else:
-            limit_val = 1 if singular else 50
-            sql += f' LIMIT {limit_val} OFFSET {offset_val}'
-    return sql
-
-
-def _fix_most_expensive_sql(sql, question):
-    """Add ORDER BY amount DESC LIMIT 1 when question asks for the single
-    most expensive expense (LLM may omit sort/limit for 'most' queries)."""
-    q = question.lower()
-    if not re.search(r'\b(?:most\s+expensive|biggest\s+expense|largest\s+expense)\b', q):
-        return sql
-    if re.search(r'\bORDER\s+BY\b', sql, re.IGNORECASE):
-        return sql
-    if re.search(r'\b(?:SUM|COUNT|AVG|COALESCE)\s*\(', sql, re.IGNORECASE):
-        return sql
-    if re.search(r'\bGROUP\s+BY\b', sql, re.IGNORECASE):
-        return sql
-    sql = sql.rstrip().rstrip(';').strip()
-    sql += ' ORDER BY amount DESC LIMIT 1'
-    return sql
-
-
-def _fix_category_breakdown_sql(sql, question):
-    """Convert plain list SQL to category breakdown when question asks for
-    breakdown by category (LLM may generate a flat list instead)."""
-    q = question.lower()
-    if not re.search(r'\b(?:breakdown\s+by\s+category|category\s+breakdown|by\s+category|which\s+category|spend\s+the\s+most\s+on|spent\s+the\s+most\s+on|category\s+wise|per\s+category|group\s+by\s+category|top\s+\d+\s+categor(?:y|ies)\s+by|categories?\s+by\s+spending)\b', q):
-        return sql
-    if re.search(r'\bGROUP\s+BY\b', sql, re.IGNORECASE):
-        return sql
-    parts = re.split(r'\bFROM\b', sql, maxsplit=1, flags=re.IGNORECASE)
-    if len(parts) < 2:
-        return sql
-    from_clause = parts[1].strip()
-    for kw in [' ORDER BY ', ' LIMIT ', ' OFFSET ', ' HAVING ']:
-        pos = from_clause.upper().find(kw)
-        if pos != -1:
-            from_clause = from_clause[:pos]
-    return f"SELECT category, COALESCE(SUM(amount), 0) as total, COUNT(*) as count FROM {from_clause} GROUP BY category ORDER BY total DESC"
-
-
-def _fix_history_id_filter(sql, question):
-    """Strip stale id exclusion filters left over from history context.
-    Removes AND id != N / AND expenses.id != N / AND e.id != N patterns
-    when the current question does NOT contain unambiguous exclusion keywords.
-    Bare 'other' is intentionally excluded since it matches the 'Other' category."""
-    exclusion_kw = re.search(r'\b(?:other\s+than|except|excluding|exclude|not\s+including|without|but\s+not|aside\s+from)\b', question, re.IGNORECASE)
-    if exclusion_kw:
-        return sql
-    sql = re.sub(
-        r'\s+AND\s+(?:expenses\.|e\.)?id\s*!=\s*\d+',
-        '',
-        sql,
-        flags=re.IGNORECASE,
-    )
-    return sql
-
-
-def _fix_date_filter(sql, question):
-    """Fix date filter to use exact date when question mentions a specific date.
-    Replaces date LIKE 'YYYY-MM%'  with date = 'YYYY-MM-DD' when the
-    question contains a YYYY-MM-DD literal or 'on <date>' pattern."""
-    m = re.search(r'\b(\d{4})-(\d{2})-(\d{2})\b', question)
-    if m:
-        exact_date = m.group(0)
-        month_pattern = exact_date[:7]  # YYYY-MM
-        sql = re.sub(
-            rf"date\s+LIKE\s*'{re.escape(month_pattern)}%'",
-            f"date = '{exact_date}'",
-            sql,
-            flags=re.IGNORECASE,
-        )
-        sql = re.sub(
-            rf"date\s*>=\s*'{exact_date}'\s+AND\s+date\s*<=\s*'{exact_date}'",
-            f"date = '{exact_date}'",
-            sql,
-            flags=re.IGNORECASE,
-        )
-
-    # Reverse: expand exact date to month filter when question is about a month
-    # but the SQL uses a single date (LLM may use {today} instead of {current_month})
-    if re.search(r'\b(?:this\s+month|last\s+month|current\s+month)\b', question, re.IGNORECASE):
-        sql = re.sub(
-            r"date\s*=\s*'(\d{4})-(\d{2})-\d{2}'",
-            r"date LIKE '\1-\2%'",
-            sql,
-            flags=re.IGNORECASE,
-        )
-
-    # Fix: when question asks about "today"/"yesterday", override the date in SQL
-    if re.search(r'\btoday\b', question, re.IGNORECASE):
-        today_str = datetime.now(TIMEZONE).strftime("%Y-%m-%d")
-        sql = re.sub(
-            r"date\s*=\s*'\d{4}-\d{2}-\d{2}'",
-            f"date = '{today_str}'",
-            sql,
-            flags=re.IGNORECASE,
-        )
-        sql = re.sub(
-            r"date\s+LIKE\s*'\d{4}-\d{2}%'",
-            f"date = '{today_str}'",
-            sql,
-            flags=re.IGNORECASE,
-        )
-    elif re.search(r'\byesterday\b|\blast\s+(?:day|date|night|evening|morning|afternoon)\b', question, re.IGNORECASE):
-        yesterday_str = (datetime.now(TIMEZONE) - timedelta(days=1)).strftime("%Y-%m-%d")
-        sql = re.sub(
-            r"date\s*=\s*'\d{4}-\d{2}-\d{2}'",
-            f"date = '{yesterday_str}'",
-            sql,
-            flags=re.IGNORECASE,
-        )
-        sql = re.sub(
-            r"date\s+LIKE\s*'\d{4}-\d{2}%'",
-            f"date = '{yesterday_str}'",
-            sql,
-            flags=re.IGNORECASE,
-        )
-
-    return sql
-
-
-def _fix_show_expenses_aggregate(sql, question):
-    """Rewrite aggregate queries to individual records when user asks to 'show expenses'
-    or asks about a specific expense item (e.g. 'which date i bought X')."""
-    q = question.lower()
-    show_intent = bool(re.search(r'\b(?:show|list|display)\b', q)) or \
-                  bool(re.search(r'\bwhat\s+(?:are|were|is|was)\b.*\b(?:expense|transaction|record)', q))
-    # Detect item lookup: "which date/day did I buy X", "when did I buy X"
-    item_intent = bool(re.search(r'\b(?:which\s+(?:date|day)|when)\b', q)) and \
-                  bool(re.search(r'\b(?:bought|buy|purchase|purchased|get|got)\b', q))
-    if not show_intent and not item_intent:
-        return sql
-    if show_intent:
-        if not re.search(r'\b(?:expense|expenses|transaction|transactions|record|records)\b', q):
-            return sql
-        if re.search(r'\b(?:how\s+much|total|sum|amount|spent|spend)\b', q):
-            return sql
-    if not re.search(r'\b(?:SUM|COUNT|AVG|COALESCE)\s*\(', sql, re.IGNORECASE):
-        return sql
-    if re.search(r'\bGROUP\s+BY\b', sql, re.IGNORECASE):
-        return sql
-    parts = re.split(r'\bFROM\b', sql, maxsplit=1, flags=re.IGNORECASE)
-    if len(parts) < 2:
-        return sql
-    return f"SELECT id, date, description, category, amount FROM {parts[1].strip()}"
-
-
-_SKIP_WORDS = frozenset({'all', 'my', 'your', 'the', 'this', 'that', 'these', 'those', 'show',
-                          'list', 'get', 'give', 'find', 'see', 'view', 'display', 'print',
-                          'any', 'some', 'every', 'each', 'total', 'month', 'day', 'week', 'year',
-                          'biggest', 'largest', 'smallest', 'cheapest', 'most', 'least',
-                          'highest', 'lowest', 'best', 'worst', 'recent', 'last', 'first',
-                          'previous', 'next', 'top', 'bottom',
-                          'today', 'todays', 'tonight', 'yesterday', 'yesterdays'})
-
-
-def _extract_item_keyword(q):
-    """Extract a potential item keyword from a question for description LIKE filtering."""
-    # Pattern 1: "bought/buy/purchase X"
-    m = re.search(r'\b(?:bought|buy|purchase|purchased|get|got)\s+(?:a\s+|an\s+|the\s+|some\s+)?(\w+)', q)
-    if m:
-        word = m.group(1).strip()
-        if word not in _SKIP_WORDS:
-            return word
-    # Pattern 2: "spent/spend on X" or "spent on X fare/ticket/etc"
-    m = re.search(r'\b(?:spent|spend)\s+on\s+(?:a\s+|an\s+|the\s+)?(\w+(?:\s+\w+)?)', q)
-    if m:
-        word = m.group(1).strip().split()[0]
-        if word not in _SKIP_WORDS:
-            return word
-    # Pattern 3: "on X" after "how much" (e.g. "how much on rickshaw")
-    m = re.search(r'\bhow\s+much\s+(?:on|for)\s+(?:a\s+|an\s+|the\s+)?(\w+)', q)
-    if m:
-        word = m.group(1).strip()
-        if word not in _SKIP_WORDS:
-            return word
-    # Pattern 4: "X expenses" — word right before "expenses/expense" (e.g. "rickshaw expenses")
-    m = re.search(r'\b(\w+)\s+expenses?\b', q)
-    if m:
-        word = m.group(1).strip()
-        if word not in _SKIP_WORDS:
-            return word
-    return None
-
-def _fix_description_filter(sql, question):
-    """If the question mentions a specific item and the SQL lacks a description LIKE filter, add one."""
-    q = question.lower()
-    if re.search(r"description\s+LIKE", sql, re.IGNORECASE):
-        return sql
-    if re.search(r"category\s*=", sql, re.IGNORECASE):
-        return sql
-    keyword = _extract_item_keyword(q)
-    if not keyword or len(keyword) < 2 or keyword in [c.lower() for c in _ALL_CATEGORIES] or keyword.endswith('est'):
-        return sql
-    insert_at = len(sql)
-    for kw in [' ORDER BY ', ' GROUP BY ', ' LIMIT ', ' OFFSET ', ' HAVING ']:
-        pos = sql.upper().find(kw)
-        if pos != -1 and pos < insert_at:
-            insert_at = pos
-    clause = f" AND LOWER(description) LIKE '%{keyword}%'"
-    return sql[:insert_at] + clause + sql[insert_at:]
-
-
-def _fix_aggregate_sql(sql, question):
-    """Convert list queries to aggregate when question asks for total/amount/sum/how much."""
-    q = question.lower()
-    if not re.search(r'\b(?:how\s+much|total|sum|amount)\b', q):
-        return sql
-    if re.search(r'\b(?:SUM|COUNT|AVG|COALESCE)\s*\(', sql, re.IGNORECASE):
-        return sql
-    if re.search(r'\bGROUP\s+BY\b', sql, re.IGNORECASE):
-        return sql
-    parts = re.split(r'\bFROM\b', sql, maxsplit=1, flags=re.IGNORECASE)
-    if len(parts) < 2:
-        return sql
-    from_clause = parts[1].strip()
-    for kw in [' ORDER BY ', ' LIMIT ', ' OFFSET ']:
-        pos = from_clause.upper().find(kw)
-        if pos != -1:
-            from_clause = from_clause[:pos]
-    return f"SELECT COALESCE(SUM(amount), 0) as total FROM {from_clause}"
-
-
-def _fix_budget_query(sql, question):
-    """Replace SQL with a proper budget query when the question asks about budget
-    but the generated SQL doesn't reference the budgets table."""
-    q = question.lower()
-    if not re.search(r'\bbudget\b', q):
-        return sql
-    if 'budgets' in sql.lower():
-        return sql
-
-    month = datetime.now(TIMEZONE).strftime("%Y-%m")
-    m = re.search(r"date\s+LIKE\s+'(\d{4}-\d{2})%'", sql)
-    if m:
-        month = m.group(1)
-
-    mentioned_cat = None
-    for cat in sorted(_ALL_CATEGORIES, key=len, reverse=True):
-        if cat.lower() in q:
-            mentioned_cat = cat
-            break
-
-    if mentioned_cat:
-        return f"SELECT b.category, b.amount as budget_amount, COALESCE(SUM(e.amount), 0) as spent, b.amount - COALESCE(SUM(e.amount), 0) as remaining FROM budgets b LEFT JOIN expenses e ON e.user_id = b.user_id AND e.category = b.category AND e.date LIKE '{month}%' WHERE b.user_id = :uid AND b.category = '{mentioned_cat}' GROUP BY b.id, b.category, b.amount"
-
-    return f"SELECT b.category, b.amount as budget_amount, (SELECT COALESCE(SUM(amount), 0) FROM expenses WHERE user_id = :uid AND date LIKE '{month}%') as spent, (SELECT COALESCE(SUM(amount), 0) FROM expenses WHERE user_id = :uid AND date LIKE '{month}%') as remaining FROM budgets b WHERE b.user_id = :uid AND b.category = '__overall__'"
+# ── SQL safety & fixes moved to services/sql_service.py ────
+# (SqlService class) ──────────────────────────────────────────
 
 
 # ── API: Auth ──────────────────────────────────────────────
@@ -819,8 +338,8 @@ def api_admin_trigger_digest():
     failed_endpoints = 0
     today = datetime.now(TIMEZONE).strftime("%Y-%m-%d")
     for uid in user_ids:
-        body = _build_digest_body(uid)
-        ok_count = send_push_notification(
+        body = NotificationService.build_digest_body(uid)
+        ok_count = NotificationService.send_push_notification(
             user_id=uid,
             title="📊 Daily Summary",
             body=body,
@@ -836,8 +355,8 @@ def api_admin_trigger_digest():
         "sent": sent,
         "failed": failed_endpoints,
         "subscribed": len(user_ids),
-        "vapid_loaded": _vapid_instance is not None,
-        "webpush_available": _pywebpush_available,
+        "vapid_loaded": NotificationService.is_vapid_configured(),
+        "webpush_available": NotificationService.is_webpush_available(),
     })
 
 
@@ -856,154 +375,8 @@ def api_learn():
     return jsonify({"success": True})
 
 
-# ── Shared Q&A Pipeline ──────────────────────────────────
-
-def _normalize_question(text):
-    """Normalize shorthand comparison queries to match SQL_PROMPT examples."""
-    if re.search(r'\bhow\s+does\s+this\s+month\s+compare\b', text, re.IGNORECASE):
-        return text
-    text = re.sub(
-        r'\bcompare\s+(?:to|with)\s+last\s+month\b',
-        'How does this month compare to last month',
-        text, flags=re.IGNORECASE,
-    )
-    text = re.sub(
-        r'\bcompare\s+(?:to|with)\s+previous\s+month\b',
-        'How does this month compare to last month',
-        text, flags=re.IGNORECASE,
-    )
-    text = re.sub(
-        r'\bthis\s+month\s+vs\.?\s+last\s+month\b',
-        'How does this month compare to last month',
-        text, flags=re.IGNORECASE,
-    )
-    text = re.sub(
-        r'\bmonth\s+over\s+month\b',
-        'How does this month compare to last month',
-        text, flags=re.IGNORECASE,
-    )
-    return text
-
-
-def _run_qa_pipeline(question, question_with_context, schema, history, uid, force_programmatic=False):
-    """Run a single question through SQL pipeline: cache→generate→validate→execute→format.
-    Returns dict with answer/sql/data/columns, or dict with error key."""
-    cached = db.get_cached_sql(question_with_context, schema)
-    if cached:
-        sql = cached["sql"]
-    else:
-        try:
-            sql = generate_sql(question_with_context, schema, history=history)
-        except Exception as e:
-            return {"error": f"LLM query failed: {str(e)}"}
-        if not sql:
-            return {"error": "Could not generate SQL query. Check API key."}
-        db.cache_qa_sql(question_with_context, sql, schema)
-
-    if not _validate_sql(sql):
-        return {"error": "Generated query is not a valid SELECT statement", "sql": sql}
-
-    sql = _ensure_user_filter(sql)
-    sql = _fix_category_in_sql(sql, question)
-    sql = _fix_sort_order(sql, question)
-    sql = _fix_sort_column(sql, question)
-    sql = _fix_frequency_sql(sql, question)
-    sql = _fix_top_n_limit(sql, question)
-    sql = _fix_limit_syntax(sql, question)
-    sql = _fix_ordinal_limit(sql, question)
-    sql = _fix_category_breakdown_sql(sql, question)
-    sql = _fix_aggregate_sql(sql, question)
-    sql = _fix_most_expensive_sql(sql, question)
-    sql = _fix_history_id_filter(sql, question)
-    sql = _fix_date_filter(sql, question)
-    sql = _fix_show_expenses_aggregate(sql, question)
-    sql = _fix_description_filter(sql, question)
-    sql = _fix_budget_query(sql, question)
-
-    try:
-        conn = db.get_connection()
-        result = conn.execute(db.text(sql), {"uid": uid})
-        columns = list(result.keys()) if result.returns_rows else []
-        rows = result.fetchmany(50)
-        rows_data = [dict(r._mapping) for r in rows]
-    except Exception as e:
-        corrected = correct_sql(sql, str(e), schema, question_with_context, history=history)
-        if corrected and _validate_sql(corrected):
-            corrected = _ensure_user_filter(corrected)
-            corrected = _fix_category_in_sql(corrected, question)
-            corrected = _fix_sort_order(corrected, question)
-            corrected = _fix_sort_column(corrected, question)
-            corrected = _fix_frequency_sql(corrected, question)
-            corrected = _fix_top_n_limit(corrected, question)
-            corrected = _fix_limit_syntax(corrected, question)
-            corrected = _fix_ordinal_limit(corrected, question)
-            corrected = _fix_category_breakdown_sql(corrected, question)
-            corrected = _fix_aggregate_sql(corrected, question)
-            corrected = _fix_most_expensive_sql(corrected, question)
-            corrected = _fix_history_id_filter(corrected, question)
-            corrected = _fix_date_filter(corrected, question)
-            corrected = _fix_show_expenses_aggregate(corrected, question)
-            corrected = _fix_description_filter(corrected, question)
-            corrected = _fix_budget_query(corrected, question)
-            try:
-                conn2 = db.get_connection()
-                result = conn2.execute(db.text(corrected), {"uid": uid})
-                columns = list(result.keys()) if result.returns_rows else []
-                rows = result.fetchmany(50)
-                rows_data = [dict(r._mapping) for r in rows]
-                sql = corrected
-            except Exception:
-                return {"error": f"Query execution failed: {str(e)}", "sql": sql, "corrected_sql": corrected}
-        else:
-            return {"error": f"Query execution failed: {str(e)}", "sql": sql}
-
-    if _needs_llm_answer(question) and not force_programmatic:
-        answer = answer_from_results(question, sql, rows_data[:20], history=history)
-        if not answer:
-            answer = format_answer(columns, rows_data, question)
-    else:
-        answer = format_answer(columns, rows_data, question)
-
-    return {"answer": answer, "sql": sql, "data": rows_data[:50], "columns": columns}
-
-
-# ── NL Q&A schema cache ──────────────────────────────────
-_schema_cache = None
-_schema_cache_time = 0
-import time as _time
-
-def _get_schema_cached():
-    global _schema_cache, _schema_cache_time
-    now = _time.time()
-    if _schema_cache and now - _schema_cache_time < 300:
-        return _schema_cache
-    _schema_cache = db.get_schema()
-    _schema_cache_time = now
-    return _schema_cache
-
-COMPLEX_KEYWORDS = [
-    "compare", "comparison", "difference", "vs ", "versus",
-    "trend", "pattern",
-    "unusual", "abnormal", "unexpected", "strange",
-    "why", "because", "reason",
-    "recommend", "suggestion", "tip", "advice",
-    "insight", "summarize", "summary", "overview",
-    "improve", "save", "reduce", "cut",
-    "increased", "decreased", "rose", "fell",
-    "budget", "budget left", "budget remaining", "exceed", "overspend",
-    "remaining", "left",
-    "percentage", "percent", "ratio",
-    "change", "growth", "decline",
-    "average", "avg", "mean",
-    "highest", "lowest", "most", "least", "top", "bottom",
-    "do i spend more", "do i spend less",
-    "on track", "how am i doing",
-    "monthly comparison", "month over month",
-]
-
-def _needs_llm_answer(question):
-    q = question.lower()
-    return any(kw in q for kw in COMPLEX_KEYWORDS)
+# ── Q&A Pipeline moved to services/qa_service.py ──────────
+# (QaService class) ──────────────────────────────────────────
 
 
 # ── NL Q&A ──────────────────────────────────────────────────
@@ -1016,56 +389,11 @@ def api_ask():
     if not question:
         return jsonify({"error": "Question required"}), 400
 
-    question = _normalize_question(question)
-
-    history = data.get("history", [])
-
-    schema = _get_schema_cached()
-    current_date = datetime.now(TIMEZONE).strftime("%B %d, %Y")
-    cleaned_for_date, expense_date = extract_date_reference(question, datetime.now(TIMEZONE))
-    date_context = f"Today is {current_date}."
-    if expense_date:
-        date_context += f" The user is referring to date {expense_date}."
-    question_with_context = f"{date_context}\n\nQuestion: {cleaned_for_date}"
-
-    # Try decomposition
-    sub_questions = decompose_question(question_with_context, schema, history=history)
-
-    if sub_questions:
-        sub_results = []
-        for sq in sub_questions:
-            sq_with_context = f"{date_context}\n\nQuestion: {sq}"
-            result = _run_qa_pipeline(sq, sq_with_context, schema, history, session["user_id"], force_programmatic=True)
-            if "error" not in result:
-                result["sub_question"] = sq
-                sub_results.append(result)
-
-        if not sub_results:
-            return jsonify({"error": "Could not answer this question"}), 500
-
-        answer = compose_answers(question, sub_results, history=history)
-        if not answer:
-            answer = " ".join(r["answer"] for r in sub_results if r.get("answer"))
-
-        all_sql = "; ".join(r["sql"] for r in sub_results if r.get("sql"))
-        all_data = []
-        seen = set()
-        for r in sub_results:
-            for row in r.get("data", []):
-                k = tuple(sorted(row.items()))
-                if k not in seen:
-                    seen.add(k)
-                    all_data.append(row)
-
-        return jsonify({
-            "answer": answer,
-            "sql": all_sql,
-            "data": all_data[:50],
-            "columns": sub_results[0].get("columns", []) if sub_results else [],
-            "decomposed": True,
-        })
-
-    result = _run_qa_pipeline(question, question_with_context, schema, history, session["user_id"])
+    result = QaService.answer_question(
+        question, data.get("history", []), session["user_id"],
+    )
+    if result is None:
+        return jsonify({"error": "Could not answer this question"}), 500
     if "error" in result:
         return jsonify(result), 500
     return jsonify(result)
@@ -1184,7 +512,7 @@ def api_chat():
     if len(message) < 2:
         return jsonify({"error": "Message required"}), 400
 
-    message = _normalize_question(message)
+    message = QaService.normalize_question(message)
 
     learned = db.get_learned_categories(session["user_id"])
 
@@ -1223,52 +551,9 @@ def api_chat():
             })
 
     # Step 3: Fall through to Q&A
-    schema = _get_schema_cached()
-    current_date = datetime.now(TIMEZONE).strftime("%B %d, %Y")
-    date_context = f"Today is {current_date}."
-    if expense_date:
-        date_context += f" The user is referring to date {expense_date}."
-    question_with_context = f"{date_context}\n\nQuestion: {cleaned_message}"
-
-    # Try decomposition
-    sub_questions = decompose_question(question_with_context, schema, history=history)
-
-    if sub_questions:
-        sub_results = []
-        for sq in sub_questions:
-            sq_with_context = f"{date_context}\n\nQuestion: {sq}"
-            result = _run_qa_pipeline(sq, sq_with_context, schema, history, session["user_id"], force_programmatic=True)
-            if "error" not in result:
-                result["sub_question"] = sq
-                sub_results.append(result)
-
-        if not sub_results:
-            return jsonify({"error": "Could not answer this question"}), 500
-
-        answer = compose_answers(message, sub_results, history=history)
-        if not answer:
-            answer = " ".join(r["answer"] for r in sub_results if r.get("answer"))
-
-        all_sql = "; ".join(r["sql"] for r in sub_results if r.get("sql"))
-        all_data = []
-        seen = set()
-        for r in sub_results:
-            for row in r.get("data", []):
-                k = tuple(sorted(row.items()))
-                if k not in seen:
-                    seen.add(k)
-                    all_data.append(row)
-
-        return jsonify({
-            "type": "question",
-            "answer": answer,
-            "sql": all_sql,
-            "data": all_data[:50],
-            "columns": sub_results[0].get("columns", []) if sub_results else [],
-            "decomposed": True,
-        })
-
-    result = _run_qa_pipeline(message, question_with_context, schema, history, session["user_id"])
+    result = QaService.answer_question(message, history, session["user_id"])
+    if result is None:
+        return jsonify({"error": "Could not answer this question"}), 500
     if "error" in result:
         return jsonify(result), 500
     return jsonify({"type": "question", **result})
@@ -1333,7 +618,7 @@ def api_expenses_bulk():
             f"{a['category']} at {a['percentage']}% (৳{a['spent']:,.0f}/৳{a['budget_amount']:,.0f})"
             for a in budget_alerts
         )
-        send_push_notification(
+        NotificationService.send_push_notification(
             user_id=session["user_id"],
             title="⚠️ Budget Alert",
             body=alerts_body,
@@ -1387,7 +672,7 @@ def api_add_expense():
             f"{a['category']} at {a['percentage']}% (৳{a['spent']:,.0f}/৳{a['budget_amount']:,.0f})"
             for a in budget_alerts
         )
-        send_push_notification(
+        NotificationService.send_push_notification(
             user_id=session["user_id"],
             title="⚠️ Budget Alert",
             body=alerts_body,
@@ -1678,7 +963,7 @@ def api_process_recurring():
         db.update_next_date(rec["id"], next_date)
         created.append({"id": exp_id, "description": rec["description"], "amount": rec["amount"]})
     if created:
-        send_push_notification(
+        NotificationService.send_push_notification(
             user_id=uid,
             title="🔄 Recurring Expenses Added",
             body=f"{len(created)} recurring expense(s) automatically created.",
@@ -1702,96 +987,13 @@ def api_daily_totals():
     return jsonify({"totals": totals_map, "year": year, "month": month})
 
 
-# ── Push Notifications ─────────────────────────────────────
-
-_vapid_instance = None
-_pywebpush_available = None
-_vapid_public_key_cache = None
-_webpush_func = None  # cached reference to pywebpush.webpush
-
-def _load_vapid():
-    global _vapid_instance, _vapid_public_key_cache
-    if _vapid_instance is not None:
-        return _vapid_instance, _vapid_public_key_cache
-    try:
-        key_bytes = VAPID_PRIVATE_KEY.encode()
-        # Try py_vapid first (pywebpush natively supports Vapid instances)
-        try:
-            from py_vapid import Vapid
-            _vapid_instance = Vapid.from_pem(key_bytes)
-        except ImportError:
-            _vapid_instance = serialization.load_pem_private_key(
-                key_bytes, password=None, backend=default_backend()
-            )
-        # Derive public key for client subscription
-        from cryptography.hazmat.primitives.asymmetric.ec import EllipticCurvePrivateKey
-        if isinstance(_vapid_instance, EllipticCurvePrivateKey):
-            raw_pub = _vapid_instance.public_key().public_bytes(Encoding.X962, PublicFormat.UncompressedPoint)
-        else:
-            raw_pub = _vapid_instance.public_key.public_bytes(Encoding.X962, PublicFormat.UncompressedPoint)
-        _vapid_public_key_cache = base64.urlsafe_b64encode(raw_pub).rstrip(b"=").decode()
-        return _vapid_instance, _vapid_public_key_cache
-    except Exception:
-        _vapid_instance = None
-        _vapid_public_key_cache = None
-        return None, None
-
-def send_push_notification(user_id, title, body, icon=None, tag=None, data=None):
-    """Send push notification to all subscriptions of a user.
-    Returns number of successful sends."""
-    if not VAPID_PRIVATE_KEY or not VAPID_CLAIM_EMAIL:
-        return 0
-    global _pywebpush_available, _webpush_func
-    if _pywebpush_available is None:
-        try:
-            from pywebpush import webpush
-            _webpush_func = webpush
-            _pywebpush_available = True
-        except ImportError:
-            _pywebpush_available = False
-            return 0
-    if not _pywebpush_available or _webpush_func is None:
-        return 0
-    vapid_key, _ = _load_vapid()
-    if vapid_key is None:
-        return 0
-    subs = db.get_user_push_subscriptions(user_id)
-    if not subs:
-        return 0
-    payload = json.dumps({
-        "title": title,
-        "body": body,
-        "icon": icon or "/static/icon-192.png",
-        "badge": "/static/icon-192.png",
-        "tag": tag or "default",
-        "data": data or {},
-    })
-    ok_count = 0
-    for sub in subs:
-        try:
-            _webpush_func(
-                subscription_info={
-                    "endpoint": sub["endpoint"],
-                    "keys": {"p256dh": sub["p256dh_key"], "auth": sub["auth_key"]},
-                },
-                data=payload,
-                vapid_private_key=vapid_key,
-                vapid_claims={"sub": VAPID_CLAIM_EMAIL},
-            )
-            ok_count += 1
-        except Exception as e:
-            err_str = str(e)
-            if "410" in err_str or "404" in err_str or "gone" in err_str.lower() or "unregistered" in err_str.lower():
-                try:
-                    db.remove_push_subscription(user_id, sub["endpoint"])
-                except Exception:
-                    pass
-    return ok_count
+# ── Push Notifications moved to services/notification_service.py ──
+# (NotificationService class) ────────────────────────────────────
 
 
 @app.route("/api/notifications/vapid-public-key", methods=["GET"])
 def api_vapid_public_key():
-    _, pub_key = _load_vapid()
+    _, pub_key = NotificationService.load_vapid()
     if not pub_key:
         return jsonify({"error": "VAPID key not configured"}), 500
     return jsonify({"publicKey": pub_key})
@@ -1822,35 +1024,6 @@ def api_unsubscribe():
     return jsonify({"success": True})
 
 
-def _build_digest_body(user_id):
-    """Build enriched daily digest notification body for a user."""
-    yesterday = (datetime.now(TIMEZONE) - timedelta(days=1)).strftime("%Y-%m-%d")
-    month = datetime.now(TIMEZONE).strftime("%Y-%m")
-    summary = db.get_yesterday_expense_summary(user_id, yesterday)
-    month_total = db.get_month_to_date_total(user_id, month)
-    daily_avg = db.get_daily_average(user_id, month)
-    parts = []
-    if summary["total"] > 0:
-        parts.append(f"Yesterday: ৳{summary['total']:,.0f} ({summary['count']} entries)")
-    else:
-        parts.append("Yesterday: No expenses")
-    parts.append(f"MTD: ৳{month_total:,.0f}")
-    if daily_avg > 0:
-        parts.append(f"Avg: ৳{daily_avg:,.0f}/day")
-    body = " | ".join(parts)
-    extra = []
-    if summary["top_category"] and summary["top_category_amount"] > 0:
-        extra.append(f"Top: {summary['top_category']} (৳{summary['top_category_amount']:,.0f})")
-    budget_alerts = db.get_budget_status(user_id, month)
-    for alert in budget_alerts:
-        pct = int(alert["percentage"])
-        if pct >= 80:
-            extra.append(f"⚠️ {alert['category']} {pct}%")
-    if extra:
-        body += "\n" + " | ".join(extra)
-    return body
-
-
 @app.route("/api/notifications/check-digest", methods=["POST"])
 @login_required
 def api_check_digest():
@@ -1862,8 +1035,8 @@ def api_check_digest():
     subs = db.get_user_push_subscriptions(uid)
     if not subs:
         return jsonify({"status": "no_subscription"})
-    body = _build_digest_body(uid)
-    ok_count = send_push_notification(
+    body = NotificationService.build_digest_body(uid)
+    ok_count = NotificationService.send_push_notification(
         user_id=uid,
         title="📊 Daily Summary",
         body=body,
@@ -1886,8 +1059,8 @@ def api_daily_digest():
     sent = 0
     today = datetime.now(TIMEZONE).strftime("%Y-%m-%d")
     for uid in user_ids:
-        body = _build_digest_body(uid)
-        ok_count = send_push_notification(
+        body = NotificationService.build_digest_body(uid)
+        ok_count = NotificationService.send_push_notification(
             user_id=uid,
             title="📊 Daily Summary",
             body=body,

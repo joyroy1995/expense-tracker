@@ -1,0 +1,179 @@
+import re
+import time as _time
+from datetime import datetime
+from config import TIMEZONE
+import database as db
+from llm import generate_sql, correct_sql, answer_from_results, format_answer, decompose_question, compose_answers, extract_date_reference
+from services.sql_service import SqlService
+
+
+COMPLEX_KEYWORDS = [
+    "compare", "comparison", "difference", "vs ", "versus",
+    "trend", "pattern",
+    "unusual", "abnormal", "unexpected", "strange",
+    "why", "because", "reason",
+    "recommend", "suggestion", "tip", "advice",
+    "insight", "summarize", "summary", "overview",
+    "improve", "save", "reduce", "cut",
+    "increased", "decreased", "rose", "fell",
+    "budget", "budget left", "budget remaining", "exceed", "overspend",
+    "remaining", "left",
+    "percentage", "percent", "ratio",
+    "change", "growth", "decline",
+    "average", "avg", "mean",
+    "highest", "lowest", "most", "least", "top", "bottom",
+    "do i spend more", "do i spend less",
+    "on track", "how am i doing",
+    "monthly comparison", "month over month",
+]
+
+_schema_cache = None
+_schema_cache_time = 0
+
+
+class QaService:
+
+    @staticmethod
+    def needs_llm_answer(question):
+        q = question.lower()
+        return any(kw in q for kw in COMPLEX_KEYWORDS)
+
+    @staticmethod
+    def normalize_question(text):
+        if re.search(r'\bhow\s+does\s+this\s+month\s+compare\b', text, re.IGNORECASE):
+            return text
+        text = re.sub(
+            r'\bcompare\s+(?:to|with)\s+last\s+month\b',
+            'How does this month compare to last month',
+            text, flags=re.IGNORECASE,
+        )
+        text = re.sub(
+            r'\bcompare\s+(?:to|with)\s+previous\s+month\b',
+            'How does this month compare to last month',
+            text, flags=re.IGNORECASE,
+        )
+        text = re.sub(
+            r'\bthis\s+month\s+vs\.?\s+last\s+month\b',
+            'How does this month compare to last month',
+            text, flags=re.IGNORECASE,
+        )
+        text = re.sub(
+            r'\bmonth\s+over\s+month\b',
+            'How does this month compare to last month',
+            text, flags=re.IGNORECASE,
+        )
+        return text
+
+    @staticmethod
+    def get_schema_cached():
+        global _schema_cache, _schema_cache_time
+        now = _time.time()
+        if _schema_cache and now - _schema_cache_time < 300:
+            return _schema_cache
+        _schema_cache = db.get_schema()
+        _schema_cache_time = now
+        return _schema_cache
+
+    @staticmethod
+    def run_qa_pipeline(question, question_with_context, schema, history, uid, force_programmatic=False):
+        cached = db.get_cached_sql(question_with_context, schema)
+        if cached:
+            sql = cached["sql"]
+        else:
+            try:
+                sql = generate_sql(question_with_context, schema, history=history)
+            except Exception as e:
+                return {"error": f"LLM query failed: {str(e)}"}
+            if not sql:
+                return {"error": "Could not generate SQL query. Check API key."}
+            db.cache_qa_sql(question_with_context, sql, schema)
+
+        if not SqlService.validate_sql(sql):
+            return {"error": "Generated query is not a valid SELECT statement", "sql": sql}
+
+        sql = SqlService.ensure_user_filter(sql)
+        sql = SqlService.apply_all_fixes(sql, question)
+
+        try:
+            conn = db.get_connection()
+            result = conn.execute(db.text(sql), {"uid": uid})
+            columns = list(result.keys()) if result.returns_rows else []
+            rows = result.fetchmany(50)
+            rows_data = [dict(r._mapping) for r in rows]
+        except Exception as e:
+            corrected = correct_sql(sql, str(e), schema, question_with_context, history=history)
+            if corrected and SqlService.validate_sql(corrected):
+                corrected = SqlService.ensure_user_filter(corrected)
+                corrected = SqlService.apply_all_fixes(corrected, question)
+                try:
+                    conn2 = db.get_connection()
+                    result = conn2.execute(db.text(corrected), {"uid": uid})
+                    columns = list(result.keys()) if result.returns_rows else []
+                    rows = result.fetchmany(50)
+                    rows_data = [dict(r._mapping) for r in rows]
+                    sql = corrected
+                except Exception:
+                    return {"error": f"Query execution failed: {str(e)}", "sql": sql, "corrected_sql": corrected}
+            else:
+                return {"error": f"Query execution failed: {str(e)}", "sql": sql}
+
+        if QaService.needs_llm_answer(question) and not force_programmatic:
+            answer = answer_from_results(question, sql, rows_data[:20], history=history)
+            if not answer:
+                answer = format_answer(columns, rows_data, question)
+        else:
+            answer = format_answer(columns, rows_data, question)
+
+        return {"answer": answer, "sql": sql, "data": rows_data[:50], "columns": columns}
+
+    @staticmethod
+    def answer_question(question, history, uid):
+        question = QaService.normalize_question(question)
+        schema = QaService.get_schema_cached()
+        current_date = datetime.now(TIMEZONE).strftime("%B %d, %Y")
+        cleaned_for_date, expense_date = extract_date_reference(question, datetime.now(TIMEZONE))
+        date_context = f"Today is {current_date}."
+        if expense_date:
+            date_context += f" The user is referring to date {expense_date}."
+        question_with_context = f"{date_context}\n\nQuestion: {cleaned_for_date}"
+
+        sub_questions = decompose_question(question_with_context, schema, history=history)
+
+        if sub_questions:
+            sub_results = []
+            for sq in sub_questions:
+                sq_with_context = f"{date_context}\n\nQuestion: {sq}"
+                result = QaService.run_qa_pipeline(sq, sq_with_context, schema, history, uid, force_programmatic=True)
+                if "error" not in result:
+                    result["sub_question"] = sq
+                    sub_results.append(result)
+
+            if not sub_results:
+                return None
+
+            answer = compose_answers(question, sub_results, history=history)
+            if not answer:
+                answer = " ".join(r["answer"] for r in sub_results if r.get("answer"))
+
+            all_sql = "; ".join(r["sql"] for r in sub_results if r.get("sql"))
+            all_data = []
+            seen = set()
+            for r in sub_results:
+                for row in r.get("data", []):
+                    k = tuple(sorted(row.items()))
+                    if k not in seen:
+                        seen.add(k)
+                        all_data.append(row)
+
+            return {
+                "answer": answer,
+                "sql": all_sql,
+                "data": all_data[:50],
+                "columns": sub_results[0].get("columns", []) if sub_results else [],
+                "decomposed": True,
+            }
+
+        result = QaService.run_qa_pipeline(question, question_with_context, schema, history, uid)
+        if "error" in result:
+            return result
+        return {"type": "question", **result}

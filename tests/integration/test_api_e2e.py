@@ -918,7 +918,7 @@ class TestAskAPI:
 
     def test_ask_generates_sql(self, auth_client, seed_expenses):
         """Test the full pipeline with mocked LLM SQL generation."""
-        with patch("app.generate_sql") as mock_gen:
+        with patch("services.qa_service.generate_sql") as mock_gen:
             mock_gen.return_value = "SELECT COALESCE(SUM(amount), 0) as total FROM expenses WHERE user_id = :uid"
             resp = auth_client.post("/api/ask", json={"question": "how much did I spend?"})
             assert resp.status_code == 200
@@ -927,7 +927,7 @@ class TestAskAPI:
             assert "sql" in data
 
     def test_ask_with_bad_sql_returns_error(self, auth_client, seed_expenses):
-        with patch("app.generate_sql") as mock_gen:
+        with patch("services.qa_service.generate_sql") as mock_gen:
             mock_gen.return_value = "DROP TABLE expenses"
             resp = auth_client.post("/api/ask", json={"question": "how much?"})
             assert resp.status_code == 500
@@ -935,8 +935,8 @@ class TestAskAPI:
             assert "error" in data or "sql" in data
 
     def test_ask_decomposes_question(self, auth_client, seed_expenses):
-        with patch("app.decompose_question") as mock_decomp, \
-             patch("app.generate_sql") as mock_gen:
+        with patch("services.qa_service.decompose_question") as mock_decomp, \
+             patch("services.qa_service.generate_sql") as mock_gen:
             mock_decomp.return_value = ["how much on food?", "how much on transport?"]
             mock_gen.return_value = "SELECT COALESCE(SUM(amount), 0) as total FROM expenses WHERE date LIKE '2025-06%' AND user_id = :uid"
             resp = auth_client.post("/api/ask", json={
@@ -985,8 +985,8 @@ class TestChatAPI:
 
     def test_chat_question_intent(self, auth_client, seed_expenses):
         with patch("app.is_question") as mock_is_q, \
-             patch("app.generate_sql") as mock_gen, \
-             patch("app.decompose_question") as mock_decomp:
+             patch("services.qa_service.generate_sql") as mock_gen, \
+             patch("services.qa_service.decompose_question") as mock_decomp:
             mock_is_q.return_value = True
             mock_decomp.return_value = []
             mock_gen.return_value = "SELECT COALESCE(SUM(amount), 0) as total FROM expenses WHERE user_id = :uid"
@@ -1006,7 +1006,7 @@ class TestNotificationsAPI:
        POST /api/notifications/subscribe, POST /api/notifications/unsubscribe,
        POST /api/notifications/check-digest"""
 
-    @patch("app._load_vapid")
+    @patch("services.notification_service.NotificationService.load_vapid")
     def test_vapid_public_key_not_configured(self, mock_load, client):
         mock_load.return_value = (None, None)
         resp = client.get("/api/notifications/vapid-public-key")
