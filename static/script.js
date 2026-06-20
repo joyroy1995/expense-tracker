@@ -577,15 +577,7 @@ async function renderHome(page = 1) {
       <div id="aiChatBody" class="chat-body">
         <div class="chat-messages" id="chatMessages"></div>
         <div class="chat-input-area">
-          <div class="chat-attach-wrap">
-            <button id="chatAttachBtn" class="chat-icon-btn" title="Attach file">📎</button>
-            <div id="chatAttachMenu" class="chat-attach-menu" style="display:none">
-              <button data-action="camera">📷 Camera</button>
-              <button data-action="gallery">🖼 Gallery</button>
-              <button data-action="clear" id="chatClearMenuBtn">🗑 Clear chat</button>
-            </div>
-          </div>
-          <input type="file" id="chatCameraInput" accept="image/*" capture="environment" style="display:none">
+          <button id="chatAttachBtn" class="chat-icon-btn" title="Attach receipt">📎</button>
           <input type="file" id="chatGalleryInput" accept="image/*" style="display:none">
           <div class="chat-input-inner">
             <textarea id="chatInput" rows="1" placeholder="Ask a question..." autocomplete="off"></textarea>
@@ -1746,24 +1738,11 @@ function initChatCard() {
     }
   }
 
-  // ── Attach button (camera / gallery) ──
-  if (attachBtn && attachMenu) {
-    attachBtn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      attachMenu.style.display = attachMenu.style.display !== 'none' ? 'none' : 'block';
-    });
-    attachMenu.querySelectorAll('button').forEach((btn) => {
-      btn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        attachMenu.style.display = 'none';
-        if (btn.dataset.action === 'camera') chatCameraInput?.click();
-        else if (btn.dataset.action === 'gallery') chatGalleryInput?.click();
-        else if (btn.dataset.action === 'clear') clearChatMessages();
-      });
-    });
-    document.removeEventListener('click', window._chatAttachClose);
-    window._chatAttachClose = () => { attachMenu.style.display = 'none'; };
-    document.addEventListener('click', window._chatAttachClose);
+  // ── Attach button (opens gallery directly) ──
+  const attachBtn = document.getElementById('chatAttachBtn');
+  const chatGalleryInput = document.getElementById('chatGalleryInput');
+  if (attachBtn && chatGalleryInput) {
+    attachBtn.addEventListener('click', () => chatGalleryInput.click());
   }
 
   // ── Collapse / expand ──
