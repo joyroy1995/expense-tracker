@@ -574,6 +574,7 @@ async function renderHome(page = 1) {
           <div id="chatAttachMenu" class="chat-attach-menu" style="display:none">
             <button data-action="camera">📷 Camera</button>
             <button data-action="gallery">🖼 Gallery</button>
+            <button data-action="clear" id="chatClearBtn">🗑 Clear chat</button>
           </div>
         </div>
         <input type="file" id="chatCameraInput" accept="image/*" capture="environment" style="display:none">
@@ -1748,6 +1749,7 @@ function initChatCard() {
         attachMenu.style.display = 'none';
         if (btn.dataset.action === 'camera') chatCameraInput?.click();
         else if (btn.dataset.action === 'gallery') chatGalleryInput?.click();
+        else if (btn.dataset.action === 'clear') clearChatMessages();
       });
     });
     document.addEventListener('click', () => { attachMenu.style.display = 'none'; });
@@ -2363,6 +2365,11 @@ async function sendChatMessage() {
     let message = input.value.trim();
     if (!message) return;
     input.value = '';
+    // Restore mic visibility after clearing input
+    const micBtn = document.getElementById('voiceBtn');
+    const sendBtn = document.getElementById('chatSendBtn');
+    if (micBtn) micBtn.style.display = 'flex';
+    if (sendBtn) sendBtn.style.display = 'none';
 
     // Strip leading action words for cleaner parsing
     message = message.replace(/^(add|save|log|record)\s+/i, '').trim();
@@ -2454,10 +2461,22 @@ async function confirmChatExpenses(index) {
 }
 
 function dismissChatExpenses(index) {
-  const msg = chatMessages[index];
-  if (!msg || msg.type !== 'expense_preview') return;
   chatMessages.splice(index, 1);
   renderChatMessages();
+}
+
+function clearChatMessages() {
+  chatMessages = [];
+  renderChatMessages();
+  const input = document.getElementById('chatInput');
+  if (input) {
+    input.value = '';
+    input.style.height = 'auto';
+  }
+  const micBtn = document.getElementById('voiceBtn');
+  const sendBtn = document.getElementById('chatSendBtn');
+  if (micBtn) micBtn.style.display = 'flex';
+  if (sendBtn) sendBtn.style.display = 'none';
 }
 
 async function refreshHomeData() {
