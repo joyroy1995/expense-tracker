@@ -2294,8 +2294,8 @@ function renderChatMessages() {
       const items = msg.items || [];
       let total = items.reduce((s, i) => s + (i.amount || 0), 0);
       let h = `<div class="chat-message ai-message"><div class="chat-bubble ai-bubble">`;
-      const headerDate = msg.date && msg.date !== new Date().toISOString().slice(0, 10) ? ` for ${msg.date}` : '';
-      h += `<div class="chat-expense-header">I found these expenses${headerDate}:</div>`;
+      const dateVal = msg.date || new Date().toISOString().slice(0, 10);
+      h += `<div class="chat-expense-header">I found these expenses <input type="date" class="chat-expense-date" value="${dateVal}" onchange="updateChatExpenseDate(${idx}, this.value)">:</div>`;
       h += `<div class="chat-expense-list">`;
       items.forEach((i, itemIdx) => {
         const col = i.color || '#6b7280';
@@ -2484,6 +2484,12 @@ function updateChatItemAmount(msgIdx, itemIdx, value) {
   if (!msg || msg.type !== 'expense_preview' || !msg.items[itemIdx]) return;
   const amt = parseFloat(value);
   msg.items[itemIdx].amount = isNaN(amt) ? 0 : amt;
+}
+
+function updateChatExpenseDate(msgIdx, value) {
+  const msg = chatMessages[msgIdx];
+  if (!msg || msg.type !== 'expense_preview') return;
+  msg.date = value;
 }
 
 async function confirmChatExpenses(index) {

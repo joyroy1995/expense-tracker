@@ -2324,11 +2324,30 @@ body {
 }
 .chat-expense-total {
   font-size: 13px;
-  font-weight: 700;
-  color: var(--text);
-  padding-top: 6px;
+  font-weight: 600;
+  text-align: right;
+  padding-top: 4px;
   border-top: 1px solid var(--border);
-  margin-bottom: 8px;
+  margin-top: 4px;
+}
+.chat-expense-date {
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font-size: 13px;
+  font-family: inherit;
+  font-weight: 500;
+  outline: none;
+  cursor: pointer;
+  padding: 0 2px;
+  border-radius: 4px;
+  -webkit-appearance: none;
+  appearance: none;
+  min-width: 100px;
+}
+.chat-expense-date:focus {
+  background: var(--bg);
+  border: 1px solid var(--border);
 }
 .chat-expense-actions {
   display: flex;
