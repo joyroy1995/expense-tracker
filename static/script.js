@@ -1761,7 +1761,9 @@ function initChatCard() {
         else if (btn.dataset.action === 'clear') clearChatMessages();
       });
     });
-    document.addEventListener('click', () => { attachMenu.style.display = 'none'; });
+    document.removeEventListener('click', window._chatAttachClose);
+    window._chatAttachClose = () => { attachMenu.style.display = 'none'; };
+    document.addEventListener('click', window._chatAttachClose);
   }
 
   // ── Collapse / expand ──
@@ -1851,8 +1853,6 @@ async function chatScanReceipt(file, cropRect) {
   const input = document.getElementById('chatInput');
   if (input) {
     input.value = message;
-    input.style.height = 'auto';
-    input.style.height = Math.min(input.scrollHeight, 200) + 'px';
   }
   sendChatMessage();
 }
@@ -2407,6 +2407,7 @@ async function sendChatMessage() {
     let message = input.value.trim();
     if (!message) return;
     input.value = '';
+    input.style.height = 'auto';
     // Restore mic visibility after clearing input
     const micBtn = document.getElementById('voiceBtn');
     const sendBtn = document.getElementById('chatSendBtn');
