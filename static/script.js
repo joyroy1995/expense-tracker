@@ -2283,8 +2283,8 @@ function renderChatMessages() {
             onchange="updateChatItemCategory(${idx}, ${itemIdx}, this.value)">
             ${catOptions}
           </select>
-          <input class="chat-expense-desc" value="${esc(i.description || '')}"
-            oninput="updateChatItemDesc(${idx}, ${itemIdx}, this.value)">
+          <textarea class="chat-expense-desc" rows="1" 
+            oninput="this.style.height='auto';this.style.height=Math.min(this.scrollHeight,120)+'px';updateChatItemDesc(${idx}, ${itemIdx}, this.value)">${esc(i.description || '')}</textarea>
           <span class="chat-expense-amt-prefix">৳</span><input class="chat-expense-amt" type="number" step="0.01" min="0" value="${(i.amount || 0).toFixed(2)}"
             oninput="updateChatItemAmount(${idx}, ${itemIdx}, this.value)">
         </div>`;
@@ -2307,6 +2307,11 @@ function renderChatMessages() {
     return '';
   }).join('');
   container.innerHTML = html;
+  // Auto-resize description textareas
+  container.querySelectorAll('.chat-expense-desc').forEach(ta => {
+    ta.style.height = 'auto';
+    ta.style.height = Math.min(ta.scrollHeight, 120) + 'px';
+  });
   container.scrollTop = container.scrollHeight;
 }
 

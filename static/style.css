@@ -2262,7 +2262,7 @@ body {
 }
 .chat-expense-item {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 8px;
   padding: 4px 0;
   font-size: 13px;
@@ -2279,6 +2279,7 @@ body {
   max-width: 90px;
   cursor: pointer;
   font-weight: 500;
+  margin-top: 3px;
 }
 .chat-expense-desc {
   flex: 1;
@@ -2291,6 +2292,9 @@ body {
   color: var(--text);
   background: var(--bg);
   outline: none;
+  resize: none;
+  overflow-y: auto;
+  line-height: 1.4;
   transition: border-color 0.15s, box-shadow 0.15s;
 }
 .chat-expense-desc:focus {
@@ -2321,6 +2325,7 @@ body {
   font-weight: 600;
   color: var(--text);
   flex-shrink: 0;
+  margin-top: 5px;
 }
 .chat-expense-total {
   font-size: 13px;
