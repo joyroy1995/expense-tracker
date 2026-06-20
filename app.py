@@ -1716,8 +1716,7 @@ def _load_vapid():
             raw_pub = _vapid_instance.public_key.public_bytes(Encoding.X962, PublicFormat.UncompressedPoint)
         _vapid_public_key_cache = base64.urlsafe_b64encode(raw_pub).rstrip(b"=").decode()
         return _vapid_instance, _vapid_public_key_cache
-    except Exception as e:
-        print(f"[push] Failed to load VAPID key: {e}", file=sys.stderr)
+    except Exception:
         _vapid_instance = None
         _vapid_public_key_cache = None
         return None, None
@@ -1766,7 +1765,6 @@ def send_push_notification(user_id, title, body, icon=None, tag=None, data=None)
             )
             ok_count += 1
         except Exception as e:
-            print(f"[push] Failed to send to user {user_id}: {type(e).__name__}: {e}", file=sys.stderr)
             err_str = str(e)
             if "410" in err_str or "404" in err_str or "gone" in err_str.lower() or "unregistered" in err_str.lower():
                 try:

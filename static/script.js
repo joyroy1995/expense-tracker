@@ -704,6 +704,9 @@ function attachExpenseForm(today) {
     splitMode = true;
     renderSplitPreview(splitItemsCache);
 
+    input.value = splitItemsCache.map(i => i.description).join(', ');
+    input.dispatchEvent(new Event('input'));
+
     if (submitBtn) {
       submitBtn.querySelector('.btn-text').textContent = `Add All (${splitItemsCache.length})`;
     }
