@@ -2395,6 +2395,7 @@ async function init() {
     if ("Notification" in window && Notification.permission === "granted") {
       subscribeToPush();
     }
+    api.post('/api/notifications/check-digest');
   }
   // Pre-fetch suggestions for welcome screen
   await fetchSuggestions();
@@ -2477,7 +2478,6 @@ async function unsubscribeFromPush() {
 
 // Logout handler
 document.getElementById('logoutBtn')?.addEventListener('click', async () => {
-  unsubscribeFromPush();
   await api.post('/api/logout');
   currentUser = null;
   navigate('/login');

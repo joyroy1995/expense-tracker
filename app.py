@@ -802,32 +802,18 @@ def api_admin_trigger_digest():
         user_sub_count[sub["user_id"]] += 1
     sent = 0
     failed_endpoints = 0
+    today = datetime.now(TIMEZONE).strftime("%Y-%m-%d")
     for uid in user_ids:
-        yesterday = (datetime.now(TIMEZONE) - timedelta(days=1)).strftime("%Y-%m-%d")
-        month = datetime.now(TIMEZONE).strftime("%Y-%m")
-        conn = db.get_connection()
-        y_row = conn.execute(
-            db.text("SELECT COALESCE(SUM(amount), 0) FROM expenses WHERE user_id = :uid AND date = :d"),
-            {"uid": uid, "d": yesterday},
-        ).fetchone()
-        m_row = conn.execute(
-            db.text("SELECT COALESCE(SUM(amount), 0) FROM expenses WHERE user_id = :uid AND SUBSTR(date, 1, 7) = :m"),
-            {"uid": uid, "m": month},
-        ).fetchone()
-        yesterday_total = y_row[0] if y_row else 0
-        month_total = m_row[0] if m_row else 0
-        body_parts = []
-        if yesterday_total > 0:
-            body_parts.append(f"Yesterday: ৳{yesterday_total:,.0f}")
-        body_parts.append(f"Month to date: ৳{month_total:,.0f}")
+        body = _build_digest_body(uid)
         ok_count = send_push_notification(
             user_id=uid,
             title="📊 Daily Summary",
-            body=" | ".join(body_parts),
+            body=body,
             tag="daily-digest",
             data={"type": "daily_digest"},
         )
         if ok_count:
+            db.set_user_last_digest_sent(uid, today)
             sent += 1
         else:
             failed_endpoints += 1
@@ -1823,6 +1809,60 @@ def api_unsubscribe():
     return jsonify({"success": True})
 
 
+def _build_digest_body(user_id):
+    """Build enriched daily digest notification body for a user."""
+    yesterday = (datetime.now(TIMEZONE) - timedelta(days=1)).strftime("%Y-%m-%d")
+    month = datetime.now(TIMEZONE).strftime("%Y-%m")
+    summary = db.get_yesterday_expense_summary(user_id, yesterday)
+    month_total = db.get_month_to_date_total(user_id, month)
+    daily_avg = db.get_daily_average(user_id, month)
+    parts = []
+    if summary["total"] > 0:
+        parts.append(f"Yesterday: ৳{summary['total']:,.0f} ({summary['count']} entries)")
+    else:
+        parts.append("Yesterday: No expenses")
+    parts.append(f"MTD: ৳{month_total:,.0f}")
+    if daily_avg > 0:
+        parts.append(f"Avg: ৳{daily_avg:,.0f}/day")
+    body = " | ".join(parts)
+    extra = []
+    if summary["top_category"] and summary["top_category_amount"] > 0:
+        extra.append(f"Top: {summary['top_category']} (৳{summary['top_category_amount']:,.0f})")
+    budget_alerts = db.get_budget_status(user_id, month)
+    for alert in budget_alerts:
+        pct = int(alert["percentage"])
+        if pct >= 80:
+            extra.append(f"⚠️ {alert['category']} {pct}%")
+    if extra:
+        body += "\n" + " | ".join(extra)
+    return body
+
+
+@app.route("/api/notifications/check-digest", methods=["POST"])
+@login_required
+def api_check_digest():
+    uid = session["user_id"]
+    today = datetime.now(TIMEZONE).strftime("%Y-%m-%d")
+    last_sent = db.get_user_last_digest_sent(uid)
+    if last_sent == today:
+        return jsonify({"status": "already_sent"})
+    subs = db.get_user_push_subscriptions(uid)
+    if not subs:
+        return jsonify({"status": "no_subscription"})
+    body = _build_digest_body(uid)
+    ok_count = send_push_notification(
+        user_id=uid,
+        title="📊 Daily Summary",
+        body=body,
+        tag="daily-digest",
+        data={"type": "daily_digest"},
+    )
+    if ok_count:
+        db.set_user_last_digest_sent(uid, today)
+        return jsonify({"status": "sent"})
+    return jsonify({"status": "failed"})
+
+
 @app.route("/api/notifications/daily-digest", methods=["POST"])
 def api_daily_digest():
     cron_secret = os.environ.get("CRON_SECRET", "")
@@ -1831,32 +1871,18 @@ def api_daily_digest():
     users = db.get_all_push_subscriptions()
     user_ids = set(u["user_id"] for u in users)
     sent = 0
+    today = datetime.now(TIMEZONE).strftime("%Y-%m-%d")
     for uid in user_ids:
-        yesterday = (datetime.now(TIMEZONE) - timedelta(days=1)).strftime("%Y-%m-%d")
-        month = datetime.now(TIMEZONE).strftime("%Y-%m")
-        conn = db.get_connection()
-        y_row = conn.execute(
-            db.text("SELECT COALESCE(SUM(amount), 0) FROM expenses WHERE user_id = :uid AND date = :d"),
-            {"uid": uid, "d": yesterday},
-        ).fetchone()
-        m_row = conn.execute(
-            db.text("SELECT COALESCE(SUM(amount), 0) FROM expenses WHERE user_id = :uid AND SUBSTR(date, 1, 7) = :m"),
-            {"uid": uid, "m": month},
-        ).fetchone()
-        yesterday_total = y_row[0] if y_row else 0
-        month_total = m_row[0] if m_row else 0
-        body_parts = []
-        if yesterday_total > 0:
-            body_parts.append(f"Yesterday: ৳{yesterday_total:,.0f}")
-        body_parts.append(f"Month to date: ৳{month_total:,.0f}")
+        body = _build_digest_body(uid)
         ok_count = send_push_notification(
             user_id=uid,
             title="📊 Daily Summary",
-            body=" | ".join(body_parts),
+            body=body,
             tag="daily-digest",
             data={"type": "daily_digest"},
         )
         if ok_count:
+            db.set_user_last_digest_sent(uid, today)
             sent += 1
     return jsonify({"sent": sent})
 

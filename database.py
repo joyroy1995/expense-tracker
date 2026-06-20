@@ -438,6 +438,27 @@ def _run_migrations():
             )
             conn.commit()
 
+    # ── Migration: last_digest_sent column ──
+    with engine.connect() as conn:
+        result = conn.execute(
+            text("SELECT COUNT(*) FROM migrations WHERE name = 'last_digest_sent'")
+        )
+        if result.fetchone()[0] == 0:
+            if _is_postgres():
+                conn.execute(
+                    text("ALTER TABLE users ADD COLUMN last_digest_sent DATE")
+                )
+            else:
+                conn.execute(
+                    text("ALTER TABLE users ADD COLUMN last_digest_sent TEXT")
+                )
+            now = datetime.now(TIMEZONE).strftime("%Y-%m-%d %H:%M:%S")
+            conn.execute(
+                text("INSERT INTO migrations (name, applied_at) VALUES ('last_digest_sent', :n)"),
+                {"n": now},
+            )
+            conn.commit()
+
 
 def _seed_superuser():    
     from config import USERNAME, PASSWORD
@@ -1010,6 +1031,88 @@ def get_all_push_subscriptions():
         text("SELECT DISTINCT user_id, endpoint, p256dh_key, auth_key FROM push_subscriptions")
     ).fetchall()
     return [{"user_id": r[0], "endpoint": r[1], "p256dh_key": r[2], "auth_key": r[3]} for r in rows]
+
+
+# ── Digest helpers ──────────────────────────────────────────────
+
+def get_user_last_digest_sent(user_id):
+    conn = get_connection()
+    row = conn.execute(
+        text("SELECT last_digest_sent FROM users WHERE id = :id"),
+        {"id": user_id},
+    ).fetchone()
+    return row[0] if row else None
+
+
+def set_user_last_digest_sent(user_id, date_str):
+    conn = get_connection()
+    conn.execute(
+        text("UPDATE users SET last_digest_sent = :d WHERE id = :id"),
+        {"d": date_str, "id": user_id},
+    )
+    conn.commit()
+
+
+def get_yesterday_expense_summary(user_id, yesterday):
+    conn = get_connection()
+    row = conn.execute(
+        text("SELECT COALESCE(SUM(amount), 0), COUNT(*) FROM expenses WHERE user_id = :uid AND date = :d"),
+        {"uid": user_id, "d": yesterday},
+    ).fetchone()
+    total = row[0] if row else 0
+    count = row[1] if row else 0
+    row = conn.execute(
+        text("""
+            SELECT category, COALESCE(SUM(amount), 0) as cat_total
+            FROM expenses WHERE user_id = :uid AND date = :d
+            GROUP BY category ORDER BY cat_total DESC LIMIT 1
+        """),
+        {"uid": user_id, "d": yesterday},
+    ).fetchone()
+    top_category = row[0] if row else None
+    top_cat_amount = row[1] if row else 0
+    row = conn.execute(
+        text("""
+            SELECT description, amount FROM expenses
+            WHERE user_id = :uid AND date = :d
+            ORDER BY amount DESC LIMIT 1
+        """),
+        {"uid": user_id, "d": yesterday},
+    ).fetchone()
+    top_exp_desc = row[0] if row else None
+    top_exp_amount = row[1] if row else 0
+    return {
+        "total": total,
+        "count": count,
+        "top_category": top_category,
+        "top_category_amount": top_cat_amount,
+        "top_expense": top_exp_desc,
+        "top_expense_amount": top_exp_amount,
+    }
+
+
+def get_month_to_date_total(user_id, month):
+    conn = get_connection()
+    row = conn.execute(
+        text("SELECT COALESCE(SUM(amount), 0) FROM expenses WHERE user_id = :uid AND SUBSTR(date, 1, 7) = :m"),
+        {"uid": user_id, "m": month},
+    ).fetchone()
+    return row[0] if row else 0
+
+
+def get_daily_average(user_id, month):
+    conn = get_connection()
+    row = conn.execute(
+        text("""
+            SELECT COALESCE(AVG(daily_total), 0) FROM (
+                SELECT SUM(amount) as daily_total
+                FROM expenses WHERE user_id = :uid AND SUBSTR(date, 1, 7) = :m
+                GROUP BY date
+            )
+        """),
+        {"uid": user_id, "m": month},
+    ).fetchone()
+    return row[0] if row else 0
 
 
 OVERALL_BUDGET_CATEGORY = "__overall__"
