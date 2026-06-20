@@ -454,6 +454,35 @@ body {
     padding-left: 40px;
 }
 
+.scanning-indicator {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 14px 16px;
+    background: var(--bg);
+    border-radius: var(--radius-sm);
+    font-size: 14px;
+    color: var(--text-secondary);
+}
+
+.scan-error {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 12px 16px;
+    background: #fef2f2;
+    border: 1px solid #fecaca;
+    border-radius: var(--radius-sm);
+    font-size: 14px;
+    color: var(--error);
+}
+
+[data-theme="dark"] .scan-error {
+    background: #3b1a1a;
+    border-color: #7f1d1d;
+}
+
 .btn {
     display: inline-flex;
     align-items: center;
@@ -499,6 +528,23 @@ body {
 .preview-container {
     margin-top: 12px;
     min-height: 44px;
+}
+
+.form-actions {
+    display: flex;
+    gap: 10px;
+    margin-top: 4px;
+}
+
+.btn-scan {
+    font-size: 14px;
+    white-space: nowrap;
+    padding: 12px 18px;
+    flex-shrink: 0;
+}
+
+.flex-1 {
+    flex: 1;
 }
 
 .preview-card {

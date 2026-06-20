@@ -601,14 +601,18 @@ async function renderHome(page = 1) {
               <label for="description">What did you spend?</label>
               <input type="text" id="description" name="description" required placeholder="e.g., badam 30 taka, rickshaw 50 tk" autocomplete="off">
               <div id="preview" class="preview-container"></div>
+              <input type="file" id="receiptInput" accept="image/*" capture="environment" style="display:none">
             </div>
           </div>
-          <button type="submit" class="btn btn-primary btn-full btn-lg" id="submitBtn">
+          <div class="form-actions">
+            <button type="button" id="scanBtn" class="btn btn-outline btn-scan">📷 Scan Receipt</button>
+            <button type="submit" class="btn btn-primary btn-lg flex-1" id="submitBtn">
             <span class="btn-text">Add Expense</span>
             <span class="btn-loader" style="display:none;">
               <span class="spinner"></span>
             </span>
           </button>
+          </div>
         </form>
       </div>
 
@@ -653,11 +657,56 @@ function attachExpenseForm(today) {
   const form = document.getElementById('expenseForm');
   const input = document.getElementById('description');
   const preview = document.getElementById('preview');
+  const scanBtn = document.getElementById('scanBtn');
+  const receiptInput = document.getElementById('receiptInput');
   if (!form || !input) return;
 
   let predictTimeout;
   let userModifiedPreview = false;
   let splitMode = false;
+
+  // ── Receipt scanning ──
+  scanBtn?.addEventListener('click', () => receiptInput?.click());
+
+  receiptInput?.addEventListener('change', async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const submitBtn = document.getElementById('submitBtn');
+    if (!preview) return;
+
+    const compressed = await compressImage(file, 1200, 0.7);
+
+    preview.innerHTML = `<div class="scanning-indicator"><span class="spinner"></span> Scanning receipt...</div>`;
+    if (submitBtn) submitBtn.disabled = true;
+
+    const formData = new FormData();
+    formData.append('image', compressed, 'receipt.jpg');
+
+    const res = await api.post('/api/scan_receipt', formData);
+    if (submitBtn) submitBtn.disabled = false;
+    e.target.value = '';
+
+    if (!res.ok || !res.data?.items?.length) {
+      preview.innerHTML = `
+        <div class="scan-error">
+          <span>❌ Could not read receipt. Try again.</span>
+          <button type="button" class="btn btn-outline btn-sm" onclick="document.getElementById('receiptInput').click()">Retake Photo</button>
+        </div>`;
+      return;
+    }
+
+    splitItemsCache = res.data.items.map(item => ({
+      description: item.description || '',
+      amount: item.amount || 0,
+      category: item.category || 'Other',
+    }));
+    splitMode = true;
+    renderSplitPreview(splitItemsCache);
+
+    if (submitBtn) {
+      submitBtn.querySelector('.btn-text').textContent = `Add All (${splitItemsCache.length})`;
+    }
+  });
 
   input.addEventListener('input', () => {
     clearTimeout(predictTimeout);
@@ -899,6 +948,31 @@ function cancelSplit() {
 
 function getSplitItems() {
   return splitItemsCache.filter(i => i.description.trim() && i.amount > 0);
+}
+
+function compressImage(file, maxDim, quality) {
+  return new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const img = new Image();
+      img.onload = () => {
+        let { width, height } = img;
+        if (width > maxDim || height > maxDim) {
+          const ratio = Math.min(maxDim / width, maxDim / height);
+          width = Math.round(width * ratio);
+          height = Math.round(height * ratio);
+        }
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0, width, height);
+        canvas.toBlob((blob) => resolve(new File([blob], 'receipt.jpg', { type: 'image/jpeg' })), 'image/jpeg', quality);
+      };
+      img.src = e.target.result;
+    };
+    reader.readAsDataURL(file);
+  });
 }
 
 function addExpenseToList(expense) {

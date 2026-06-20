@@ -13,7 +13,7 @@ import database as db
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import serialization
-from llm_service import extract_expense, predict_expense, extract_keywords, generate_sql, correct_sql, answer_from_results, format_answer, split_expenses, _clean_split_desc, extract_date_reference, clean_date_refs, detect_budget_intent, is_question, transcribe_audio, decompose_question, compose_answers, generate_forecast
+from llm_service import extract_expense, predict_expense, extract_keywords, generate_sql, correct_sql, answer_from_results, format_answer, split_expenses, _clean_split_desc, extract_date_reference, clean_date_refs, detect_budget_intent, is_question, transcribe_audio, decompose_question, compose_answers, generate_forecast, scan_receipt
 from database import _ALL_CATEGORIES
 from config import USERNAME, PASSWORD, SECRET_KEY, CATEGORY_COLORS, TIMEZONE, SEED_CATEGORIES, VAPID_PRIVATE_KEY, VAPID_CLAIM_EMAIL
 
@@ -2042,6 +2042,28 @@ def api_transcribe():
     try:
         text = transcribe_audio(audio.read(), mime_type)
         return jsonify({"text": text})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# ── Receipt scanning ───────────────────────────────────────
+
+ALLOWED_RECEIPT_MIME = {"image/jpeg", "image/png", "image/webp", "image/heic", "image/heif"}
+
+
+@app.route("/api/scan_receipt", methods=["POST"])
+@login_required
+def api_scan_receipt():
+    if "image" not in request.files:
+        return jsonify({"error": "No image uploaded"}), 400
+    image = request.files["image"]
+    if image.mimetype not in ALLOWED_RECEIPT_MIME:
+        return jsonify({"error": "Unsupported image format"}), 400
+    try:
+        result = scan_receipt(image.read())
+        if not result or not result.get("items"):
+            return jsonify({"error": "Could not extract any items from the receipt", "items": []})
+        return jsonify(result)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 

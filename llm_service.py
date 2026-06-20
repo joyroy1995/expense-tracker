@@ -2,6 +2,7 @@ from groq import Groq
 import json
 import re
 import os
+import base64
 import calendar
 from datetime import date as _d, timedelta, date
 from config import SEED_CATEGORIES
@@ -1326,3 +1327,106 @@ def transcribe_audio(audio_bytes, mime_type="audio/webm"):
         language="en",
     )
     return transcript.strip()
+
+
+# ── Receipt Scanning ─────────────────────────────────────────
+
+RECEIPT_SCAN_PROMPT = """You are a receipt parser for a Bangladeshi expense tracker.
+Given a receipt image, extract all line items.
+
+For each item, return:
+- description: the item name (keep quantity like "1 kg", "2 ta", etc.)
+- amount: the price in BDT (number only, no currency symbol)
+
+If a store/merchant name or date is visible on the receipt, include them.
+If the receipt text is in Bengali or Banglish, extract and return in that form.
+
+Return ONLY a valid JSON object with this exact structure:
+{"store": "store name or null", "date": "YYYY-MM-DD or null", "items": [{"description": "...", "amount": 123.45}]}
+
+Do not add any explanation or extra text."""
+
+
+def _scan_receipt_groq(image_bytes):
+    """Attempt receipt scanning via Groq vision API."""
+    client = _get_client()
+    if not client:
+        return None
+    b64 = base64.b64encode(image_bytes).decode()
+    models = ["meta-llama/llama-4-scout-17b-16e-instruct", "llama-3.2-11b-vision-preview"]
+    for model in models:
+        try:
+            response = client.chat.completions.create(
+                model=model,
+                messages=[{
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": RECEIPT_SCAN_PROMPT},
+                        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
+                    ],
+                }],
+                temperature=0.1,
+                max_tokens=1000,
+            )
+            text = response.choices[0].message.content.strip().strip("```").strip()
+            if text.lower().startswith("json"):
+                text = text[4:].strip()
+            return json.loads(text)
+        except Exception:
+            continue
+    return None
+
+
+def _scan_receipt_gemini(image_bytes):
+    """Attempt receipt scanning via Gemini 2.0 Flash API."""
+    api_key = os.environ.get("GEMINI_API_KEY", "")
+    if not api_key:
+        return None
+    b64 = base64.b64encode(image_bytes).decode()
+    import urllib.request
+
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={api_key}"
+    payload = {
+        "contents": [{
+            "parts": [
+                {"text": RECEIPT_SCAN_PROMPT},
+                {"inline_data": {"mime_type": "image/jpeg", "data": b64}},
+            ],
+        }],
+    }
+    try:
+        req = urllib.request.Request(
+            url,
+            data=json.dumps(payload).encode(),
+            headers={"Content-Type": "application/json"},
+        )
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            result = json.loads(resp.read().decode())
+        text = result["candidates"][0]["content"]["parts"][0]["text"]
+        text = text.strip().strip("```").strip()
+        if text.lower().startswith("json"):
+            text = text[4:].strip()
+        return json.loads(text)
+    except Exception:
+        return None
+
+
+def scan_receipt(image_bytes):
+    """Extract structured data from a receipt image.
+    Tries Groq vision first, falls back to Gemini 2.0 Flash.
+    Returns {"store": ..., "date": ..., "items": [...]} or None.
+    Each item is categorized via extract_expense.
+    """
+    result = _scan_receipt_groq(image_bytes)
+    if result and result.get("items"):
+        for item in result["items"]:
+            cat_result = extract_expense(item.get("description", ""))
+            item["category"] = cat_result["category"]
+        return result
+    result = _scan_receipt_gemini(image_bytes)
+    if result and result.get("items"):
+        for item in result["items"]:
+            cat_result = extract_expense(item.get("description", ""))
+            item["category"] = cat_result["category"]
+        return result
+    return None
