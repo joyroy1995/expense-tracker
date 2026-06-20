@@ -2238,11 +2238,20 @@ body {
 }
 .chat-expense-desc {
   flex: 1;
-  color: var(--text);
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  padding: 2px 4px;
+  font-size: 13px;
+  font-family: inherit;
+  color: var(--text);
+  background: transparent;
+  outline: none;
+  transition: border-color 0.15s, background 0.15s;
+}
+.chat-expense-desc:focus {
+  border-color: var(--border);
+  background: var(--bg);
 }
 .chat-expense-amt {
   font-weight: 600;

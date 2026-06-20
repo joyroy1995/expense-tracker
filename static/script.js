@@ -2264,7 +2264,8 @@ function renderChatMessages() {
             onchange="updateChatItemCategory(${idx}, ${itemIdx}, this.value)">
             ${catOptions}
           </select>
-          <span class="chat-expense-desc">${esc(i.description || '')}</span>
+          <input class="chat-expense-desc" value="${esc(i.description || '')}"
+            oninput="updateChatItemDesc(${idx}, ${itemIdx}, this.value)">
           <span class="chat-expense-amt">৳${(i.amount || 0).toFixed(2)}</span>
         </div>`;
       });
@@ -2420,6 +2421,12 @@ function updateChatItemCategory(msgIdx, itemIdx, newCategory) {
   if (!msg || msg.type !== 'expense_preview' || !msg.items[itemIdx]) return;
   msg.items[itemIdx].category = newCategory;
   msg.items[itemIdx].color = (window.categoryColors || {})[newCategory] || '#6b7280';
+}
+
+function updateChatItemDesc(msgIdx, itemIdx, value) {
+  const msg = chatMessages[msgIdx];
+  if (!msg || msg.type !== 'expense_preview' || !msg.items[itemIdx]) return;
+  msg.items[itemIdx].description = value;
 }
 
 async function confirmChatExpenses(index) {
