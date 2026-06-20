@@ -1348,12 +1348,13 @@ Do not add any explanation or extra text."""
 
 
 def _scan_receipt_groq(image_bytes):
-    """Attempt receipt scanning via Groq vision API."""
+    """Attempt receipt scanning via Groq vision API. Returns (data_dict, error_str)."""
     client = _get_client()
     if not client:
-        return None
+        return None, "GROQ_API_KEY not configured"
     b64 = base64.b64encode(image_bytes).decode()
     models = ["meta-llama/llama-4-scout-17b-16e-instruct", "llama-3.2-11b-vision-preview"]
+    last_error = ""
     for model in models:
         try:
             response = client.chat.completions.create(
@@ -1371,17 +1372,21 @@ def _scan_receipt_groq(image_bytes):
             text = response.choices[0].message.content.strip().strip("```").strip()
             if text.lower().startswith("json"):
                 text = text[4:].strip()
-            return json.loads(text)
-        except Exception:
-            continue
-    return None
+            parsed = json.loads(text)
+            return parsed, None
+        except json.JSONDecodeError as e:
+            last_error = f"Groq vision ({model}): invalid JSON response - {e}"
+        except Exception as e:
+            last_error = f"Groq vision ({model}): {type(e).__name__} - {e}"
+        continue
+    return None, last_error
 
 
 def _scan_receipt_gemini(image_bytes):
-    """Attempt receipt scanning via Gemini 2.0 Flash API."""
+    """Attempt receipt scanning via Gemini 2.0 Flash API. Returns (data_dict, error_str)."""
     api_key = os.environ.get("GEMINI_API_KEY", "")
     if not api_key:
-        return None
+        return None, "GEMINI_API_KEY not configured"
     b64 = base64.b64encode(image_bytes).decode()
     import urllib.request
 
@@ -1406,27 +1411,34 @@ def _scan_receipt_gemini(image_bytes):
         text = text.strip().strip("```").strip()
         if text.lower().startswith("json"):
             text = text[4:].strip()
-        return json.loads(text)
-    except Exception:
-        return None
+        parsed = json.loads(text)
+        return parsed, None
+    except json.JSONDecodeError as e:
+        return None, f"Gemini: invalid JSON response - {e}"
+    except Exception as e:
+        return None, f"Gemini: {type(e).__name__} - {e}"
 
 
 def scan_receipt(image_bytes):
     """Extract structured data from a receipt image.
     Tries Groq vision first, falls back to Gemini 2.0 Flash.
-    Returns {"store": ..., "date": ..., "items": [...]} or None.
-    Each item is categorized via extract_expense.
+    Returns dict with "store", "date", "items" (categorized via extract_expense),
+    or dict with "error" string on failure.
     """
-    result = _scan_receipt_groq(image_bytes)
-    if result and result.get("items"):
-        for item in result["items"]:
-            cat_result = extract_expense(item.get("description", ""))
-            item["category"] = cat_result["category"]
-        return result
-    result = _scan_receipt_gemini(image_bytes)
-    if result and result.get("items"):
-        for item in result["items"]:
-            cat_result = extract_expense(item.get("description", ""))
-            item["category"] = cat_result["category"]
-        return result
-    return None
+    result, error = _scan_receipt_groq(image_bytes)
+    if result is not None:
+        if result.get("items"):
+            for item in result["items"]:
+                cat_result = extract_expense(item.get("description", ""))
+                item["category"] = cat_result["category"]
+            return result
+        return {"error": "Receipt detected but no line items found. Try a clearer photo."}
+    result, gemini_error = _scan_receipt_gemini(image_bytes)
+    if result is not None:
+        if result.get("items"):
+            for item in result["items"]:
+                cat_result = extract_expense(item.get("description", ""))
+                item["category"] = cat_result["category"]
+            return result
+        return {"error": "Receipt detected but no line items found. Try a clearer photo."}
+    return {"error": error if error else gemini_error or "No vision API available. Set GROQ_API_KEY or GEMINI_API_KEY."}

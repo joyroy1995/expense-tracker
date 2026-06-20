@@ -478,6 +478,11 @@ body {
     color: var(--error);
 }
 
+.scan-error-msg {
+    word-break: break-word;
+    line-height: 1.4;
+}
+
 [data-theme="dark"] .scan-error {
     background: #3b1a1a;
     border-color: #7f1d1d;

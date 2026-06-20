@@ -682,15 +682,16 @@ function attachExpenseForm(today) {
     const formData = new FormData();
     formData.append('image', compressed, 'receipt.jpg');
 
-    const res = await api.post('/api/scan_receipt', formData);
+    const res = await api.postForm('/api/scan_receipt', formData);
     if (submitBtn) submitBtn.disabled = false;
     e.target.value = '';
 
     if (!res.ok || !res.data?.items?.length) {
+      const errMsg = res.data?.error || res.error || 'Could not read receipt';
       preview.innerHTML = `
         <div class="scan-error">
-          <span>❌ Could not read receipt. Try again.</span>
-          <button type="button" class="btn btn-outline btn-sm" onclick="document.getElementById('receiptInput').click()">Retake Photo</button>
+          <span class="scan-error-msg">❌ ${esc(errMsg)}</span>
+          <button type="button" class="btn btn-outline btn-sm" onclick="document.getElementById('receiptInput').click()">Retake</button>
         </div>`;
       return;
     }
@@ -951,11 +952,14 @@ function getSplitItems() {
 }
 
 function compressImage(file, maxDim, quality) {
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => resolve(file), 10000);
     const reader = new FileReader();
     reader.onload = (e) => {
       const img = new Image();
+      img.onerror = () => { clearTimeout(timeout); resolve(file); };
       img.onload = () => {
+        clearTimeout(timeout);
         let { width, height } = img;
         if (width > maxDim || height > maxDim) {
           const ratio = Math.min(maxDim / width, maxDim / height);
@@ -967,10 +971,14 @@ function compressImage(file, maxDim, quality) {
         canvas.height = height;
         const ctx = canvas.getContext('2d');
         ctx.drawImage(img, 0, 0, width, height);
-        canvas.toBlob((blob) => resolve(new File([blob], 'receipt.jpg', { type: 'image/jpeg' })), 'image/jpeg', quality);
+        canvas.toBlob((blob) => {
+          if (blob) resolve(new File([blob], 'receipt.jpg', { type: 'image/jpeg' }));
+          else { clearTimeout(timeout); resolve(file); }
+        }, 'image/jpeg', quality);
       };
       img.src = e.target.result;
     };
+    reader.onerror = () => { clearTimeout(timeout); resolve(file); };
     reader.readAsDataURL(file);
   });
 }

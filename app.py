@@ -2061,11 +2061,13 @@ def api_scan_receipt():
         return jsonify({"error": "Unsupported image format"}), 400
     try:
         result = scan_receipt(image.read())
-        if not result or not result.get("items"):
-            return jsonify({"error": "Could not extract any items from the receipt", "items": []})
+        if result.get("error"):
+            return jsonify(result), 422
+        if not result.get("items"):
+            return jsonify({"error": "No items found in receipt", "items": []}), 422
         return jsonify(result)
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": f"Scan failed: {type(e).__name__}: {e}"}), 500
 
 
 # ── Service Worker (for push notifications & caching) ──────
