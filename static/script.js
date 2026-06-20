@@ -601,7 +601,7 @@ async function renderHome(page = 1) {
               <label for="description">What did you spend?</label>
               <input type="text" id="description" name="description" required placeholder="e.g., badam 30 taka, rickshaw 50 tk" autocomplete="off">
               <div id="preview" class="preview-container"></div>
-              <input type="file" id="receiptInput" accept="image/*" capture="environment" style="display:none">
+              <input type="file" id="receiptInput" accept="image/*" style="display:none">
             </div>
           </div>
           <div class="form-actions">

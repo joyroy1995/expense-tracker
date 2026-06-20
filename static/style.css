@@ -2283,19 +2283,19 @@ body {
 .chat-expense-desc {
   flex: 1;
   min-width: 0;
-  border: 1px solid transparent;
+  border: 1px solid var(--border);
   border-radius: 4px;
-  padding: 2px 4px;
+  padding: 4px 6px;
   font-size: 13px;
   font-family: inherit;
   color: var(--text);
-  background: transparent;
+  background: var(--bg);
   outline: none;
-  transition: border-color 0.15s, background 0.15s;
+  transition: border-color 0.15s, box-shadow 0.15s;
 }
 .chat-expense-desc:focus {
-  border-color: var(--border);
-  background: var(--bg);
+  border-color: var(--primary);
+  box-shadow: 0 0 0 2px var(--primary-light);
 }
 .chat-expense-amt {
   font-weight: 600;
@@ -2304,18 +2304,18 @@ body {
   flex-shrink: 0;
   width: 80px;
   text-align: right;
-  border: 1px solid transparent;
+  border: 1px solid var(--border);
   border-radius: 4px;
-  padding: 2px 4px;
+  padding: 4px 6px;
   font-size: 13px;
   font-family: inherit;
-  background: transparent;
+  background: var(--bg);
   outline: none;
-  transition: border-color 0.15s, background 0.15s;
+  transition: border-color 0.15s, box-shadow 0.15s;
 }
 .chat-expense-amt:focus {
-  border-color: var(--border);
-  background: var(--bg);
+  border-color: var(--primary);
+  box-shadow: 0 0 0 2px var(--primary-light);
 }
 .chat-expense-amt-prefix {
   font-weight: 600;
@@ -2331,19 +2331,24 @@ body {
   margin-top: 4px;
 }
 .chat-expense-date {
-  border: none;
-  background: transparent;
+  border: 1px solid var(--border);
+  background: var(--bg);
   color: var(--text);
   font-size: 13px;
   font-family: inherit;
   font-weight: 500;
   outline: none;
   cursor: pointer;
-  padding: 0 2px;
+  padding: 4px 6px;
   border-radius: 4px;
   -webkit-appearance: none;
   appearance: none;
-  min-width: 100px;
+  min-width: 130px;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.chat-expense-date:focus {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 2px var(--primary-light);
 }
 .chat-expense-date:focus {
   background: var(--bg);
