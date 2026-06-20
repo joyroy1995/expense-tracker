@@ -24,6 +24,21 @@ app.config.update(
     SESSION_COOKIE_HTTPONLY=True,
 )
 
+def _static_version():
+    v = 1
+    for name in ('style.css', 'script.js'):
+        fp = os.path.join(app.static_folder, name)
+        try:
+            m = int(os.path.getmtime(fp))
+            v += m
+        except OSError:
+            pass
+    return v
+
+@app.context_processor
+def inject_static_version():
+    return dict(static_version=_static_version())
+
 
 # ── Close DB connection after each request ─────────────────
 @app.teardown_appcontext

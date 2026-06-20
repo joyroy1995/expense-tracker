@@ -586,20 +586,6 @@ async function renderHome(page = 1) {
       </div>
     </div>
 
-    <div id="cropModal" class="crop-modal" style="display:none">
-      <div class="crop-modal-backdrop"></div>
-      <div class="crop-modal-content">
-        <div class="crop-image-wrap">
-          <img id="cropImage" src="" alt="Crop receipt">
-          <div class="crop-selection" id="cropSelection"></div>
-        </div>
-        <div class="crop-modal-actions">
-          <button type="button" class="btn btn-outline" id="cropCancelBtn">Cancel</button>
-          <button type="button" class="btn btn-primary" id="cropConfirmBtn">Crop & Scan</button>
-        </div>
-      </div>
-    </div>
-
     <div class="main-grid">
       <div class="card add-expense-card">
         <h2 class="card-title">Add Expense</h2>
@@ -1708,11 +1694,6 @@ function initChatCard() {
   const attachMenu = document.getElementById('chatAttachMenu');
   const chatCameraInput = document.getElementById('chatCameraInput');
   const chatGalleryInput = document.getElementById('chatGalleryInput');
-  const cropModal = document.getElementById('cropModal');
-  const cropImage = document.getElementById('cropImage');
-  const cropSelection = document.getElementById('cropSelection');
-  const cropCancelBtn = document.getElementById('cropCancelBtn');
-  const cropConfirmBtn = document.getElementById('cropConfirmBtn');
 
   function toggleInputButtons() {
     const hasText = input && input.value.trim().length > 0;
@@ -1775,119 +1756,13 @@ function initChatCard() {
   chatCameraInput?.addEventListener('change', (e) => {
     const file = e.target.files?.[0];
     e.target.value = '';
-    if (file) openChatScan(file);
+    if (file) chatScanReceipt(file, null);
   });
   chatGalleryInput?.addEventListener('change', (e) => {
     const file = e.target.files?.[0];
     e.target.value = '';
-    if (file) openChatScan(file);
+    if (file) chatScanReceipt(file, null);
   });
-
-  // ── Crop modal ──
-  let cropFile = null;
-  let cropStartX, cropStartY, cropEndX, cropEndY;
-  let cropDragging = false;
-  let cropEventsSetup = false;
-
-  function openCropModal(file) {
-    cropFile = file;
-    const reader = new FileReader();
-    reader.onload = () => {
-      cropImage.src = reader.result;
-      cropModal.style.display = 'flex';
-      cropSelection.style.display = 'none';
-    };
-    reader.readAsDataURL(file);
-  }
-
-  function closeCropModal() {
-    cropModal.style.display = 'none';
-    cropImage.src = '';
-    cropFile = null;
-  }
-
-  cropCancelBtn?.addEventListener('click', closeCropModal);
-
-  cropConfirmBtn?.addEventListener('click', async () => {
-    if (!cropFile || !cropImage.naturalWidth) return;
-    const rect = cropSelection.style.display !== 'none'
-      ? { x: Math.min(cropStartX, cropEndX), y: Math.min(cropStartY, cropEndY), w: Math.abs(cropEndX - cropStartX), h: Math.abs(cropEndY - cropStartY) }
-      : null;
-    closeCropModal();
-    const scaleX = cropImage.naturalWidth / cropImage.offsetWidth;
-    const scaleY = cropImage.naturalHeight / cropImage.offsetHeight;
-    if (rect && rect.w > 5 && rect.h > 5) {
-      rect.x = Math.round(rect.x * scaleX);
-      rect.y = Math.round(rect.y * scaleY);
-      rect.w = Math.round(rect.w * scaleX);
-      rect.h = Math.round(rect.h * scaleY);
-    }
-    await chatScanReceipt(cropFile, rect);
-  });
-
-  if (!cropEventsSetup && cropImage) {
-    cropEventsSetup = true;
-    const wrap = cropImage.parentElement;
-    const clearEvents = () => { cropDragging = false; };
-
-    function getCropPos(e) {
-      const r = wrap.getBoundingClientRect();
-      const pt = e.touches ? { x: e.touches[0].clientX, y: e.touches[0].clientY } : { x: e.clientX, y: e.clientY };
-      return { x: pt.x - r.left, y: pt.y - r.top };
-    }
-
-    function updateCropSelection() {
-      const x = Math.min(cropStartX, cropEndX);
-      const y = Math.min(cropStartY, cropEndY);
-      const w = Math.abs(cropEndX - cropStartX);
-      const h = Math.abs(cropEndY - cropStartY);
-      cropSelection.style.left = x + 'px';
-      cropSelection.style.top = y + 'px';
-      cropSelection.style.width = w + 'px';
-      cropSelection.style.height = h + 'px';
-    }
-
-    const startDrag = (e) => {
-      e.preventDefault();
-      cropDragging = true;
-      const p = getCropPos(e);
-      cropStartX = cropEndX = p.x;
-      cropStartY = cropEndY = p.y;
-      cropSelection.style.display = 'block';
-      updateCropSelection();
-    };
-
-    const moveDrag = (e) => {
-      if (!cropDragging) return;
-      e.preventDefault();
-      const p = getCropPos(e);
-      cropEndX = Math.max(0, Math.min(p.x, wrap.offsetWidth));
-      cropEndY = Math.max(0, Math.min(p.y, wrap.offsetHeight));
-      updateCropSelection();
-    };
-
-    wrap.addEventListener('mousedown', startDrag);
-    document.addEventListener('mousemove', moveDrag);
-    document.addEventListener('mouseup', clearEvents);
-    wrap.addEventListener('touchstart', startDrag, { passive: false });
-    document.addEventListener('touchmove', moveDrag, { passive: false });
-    document.addEventListener('touchend', clearEvents);
-  }
-}
-
-function openChatScan(file) {
-  const cropModal = document.getElementById('cropModal');
-  const cropImage = document.getElementById('cropImage');
-  const cropSelection = document.getElementById('cropSelection');
-  if (!cropModal || !cropImage) return;
-
-  const reader = new FileReader();
-  reader.onload = () => {
-    cropImage.src = reader.result;
-    cropModal.style.display = 'flex';
-    cropSelection.style.display = 'none';
-  };
-  reader.readAsDataURL(file);
 }
 
 async function chatScanReceipt(file, cropRect) {
@@ -2519,26 +2394,12 @@ async function sendChatMessage() {
       } else {
         addChatMessage('ai', `Sorry, I couldn't set that budget. ${res.error || 'Please try again.'}`);
       }
-      const body = document.getElementById('aiChatBody');
-      const icon = document.getElementById('aiChatCollapseIcon');
-      if (body && body.classList.contains('chat-body-collapsed')) {
-        body.classList.remove('chat-body-collapsed');
-        if (icon) icon.textContent = '▼';
-        localStorage.setItem('aiChatCollapsed', 'false');
-      }
       return;
     }
 
     if (d.type === 'expense') {
       chatMessages.push({ type: 'expense_preview', items: d.items, date: d.date });
       renderChatMessages();
-      const body = document.getElementById('aiChatBody');
-      const icon = document.getElementById('aiChatCollapseIcon');
-      if (body && body.classList.contains('chat-body-collapsed')) {
-        body.classList.remove('chat-body-collapsed');
-        if (icon) icon.textContent = '▼';
-        localStorage.setItem('aiChatCollapsed', 'false');
-      }
       return;
     }
 
@@ -2549,14 +2410,6 @@ async function sendChatMessage() {
       suggestions = fallback.slice(0, 3);
     }
     addChatMessage('ai', d.answer || 'I found ' + (d.data ? d.data.length : 0) + ' result(s).', d.sql, d.data, d.columns, suggestions);
-
-    const body = document.getElementById('aiChatBody');
-    const icon = document.getElementById('aiChatCollapseIcon');
-    if (body && body.classList.contains('chat-body-collapsed')) {
-      body.classList.remove('chat-body-collapsed');
-      if (icon) icon.textContent = '▼';
-      localStorage.setItem('aiChatCollapsed', 'false');
-    }
   } finally {
     isSendingMessage = false;
   }
@@ -2657,10 +2510,6 @@ async function init() {
   const me = await api.get('/api/me');
   if (me.ok) {
     currentUser = me.data;
-    if ("Notification" in window && Notification.permission === "granted") {
-      subscribeToPush();
-    }
-    api.post('/api/notifications/check-digest');
   }
   // Pre-fetch suggestions for welcome screen
   await fetchSuggestions();
