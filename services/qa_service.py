@@ -1,4 +1,6 @@
+import os
 import re
+import sys
 import time as _time
 from datetime import datetime
 from config import TIMEZONE
@@ -31,6 +33,15 @@ COMPLEX_KEYWORDS = [
 _schema_cache = None
 _schema_cache_time = 0
 _pattern_engine = PatternEngine()
+
+_TRACE_ENABLED = os.environ.get("QA_TRACE", "0") == "1"
+
+
+def _log_trace(question, trace):
+    if not _TRACE_ENABLED:
+        return
+    stages = [f"{k}={v}ms" for k, v in trace.items() if isinstance(v, (int, float))]
+    print(f"[TRACE] {trace.get('source', 'cache')} | {' | '.join(stages)} | q={question[:60]}", file=sys.stderr)
 
 
 class QaService:
@@ -78,7 +89,12 @@ class QaService:
 
     @staticmethod
     def run_qa_pipeline(question, question_with_context, schema, history, uid, force_programmatic=False):
+        trace = {}
+        t0 = _time.time()
+
+        t = _time.time()
         cached = db.get_cached_response(question_with_context, schema)
+        trace["response_cache"] = round((_time.time() - t) * 1000, 1)
         if cached:
             return {
                 "answer": cached["answer"],
@@ -86,32 +102,47 @@ class QaService:
                 "data": cached["response_data"].get("rows", []),
                 "columns": cached["response_data"].get("columns", []),
                 "from_cache": True,
+                "trace": trace,
             }
 
         sql = None
         from_pattern = False
+        from_sql_cache = False
+
+        t = _time.time()
         cached_sql = db.get_cached_sql(question_with_context, schema)
+        trace["sql_cache"] = round((_time.time() - t) * 1000, 1)
         if cached_sql:
             sql = cached_sql["sql"]
+            from_sql_cache = True
         else:
+            t = _time.time()
             pattern_result = _pattern_engine.match(question)
+            trace["pattern_engine"] = round((_time.time() - t) * 1000, 1)
             if pattern_result:
                 sql = pattern_result[0]
                 from_pattern = True
+                trace["source"] = "pattern"
             else:
+                t = _time.time()
                 try:
                     sql = generate_sql(question_with_context, schema, history=history)
                 except Exception as e:
-                    return {"error": f"LLM query failed: {str(e)}"}
+                    return {"error": f"LLM query failed: {str(e)}", "trace": trace}
+                trace["llm_gen"] = round((_time.time() - t) * 1000, 1)
                 if not sql:
-                    return {"error": "Could not generate SQL query. Check API key."}
+                    return {"error": "Could not generate SQL query. Check API key.", "trace": trace}
+                trace["source"] = "llm"
 
+        t = _time.time()
         if not SqlService.validate_sql(sql):
-            return {"error": "Generated query is not a valid SELECT statement", "sql": sql}
+            return {"error": "Generated query is not a valid SELECT statement", "sql": sql, "trace": trace}
 
         sql = SqlService.ensure_user_filter(sql)
         sql = SqlService.apply_all_fixes(sql, question)
+        trace["sql_fixes"] = round((_time.time() - t) * 1000, 1)
 
+        t = _time.time()
         try:
             conn = db.get_connection()
             result = conn.execute(db.text(sql), {"uid": uid})
@@ -131,10 +162,12 @@ class QaService:
                     rows_data = [dict(r._mapping) for r in rows]
                     sql = corrected
                 except Exception:
-                    return {"error": f"Query execution failed: {str(e)}", "sql": sql, "corrected_sql": corrected}
+                    return {"error": f"Query execution failed: {str(e)}", "sql": sql, "corrected_sql": corrected, "trace": trace}
             else:
-                return {"error": f"Query execution failed: {str(e)}", "sql": sql}
+                return {"error": f"Query execution failed: {str(e)}", "sql": sql, "trace": trace}
+        trace["exec"] = round((_time.time() - t) * 1000, 1)
 
+        t = _time.time()
         if from_pattern:
             answer = format_answer(columns, rows_data, question)
         elif QaService.needs_llm_answer(question) and not force_programmatic:
@@ -143,13 +176,17 @@ class QaService:
                 answer = format_answer(columns, rows_data, question)
         else:
             answer = format_answer(columns, rows_data, question)
+        trace["answer"] = round((_time.time() - t) * 1000, 1)
 
-        result = {"answer": answer, "sql": sql, "data": rows_data[:50], "columns": columns}
-
-        if not from_pattern:
+        t = _time.time()
+        if not from_pattern and not from_sql_cache:
             db.cache_qa_sql(question_with_context, sql, schema)
         db.cache_response(question_with_context, sql, {"rows": rows_data[:50], "columns": columns}, answer, schema)
+        trace["cache_write"] = round((_time.time() - t) * 1000, 1)
 
+        trace["total"] = round((_time.time() - t0) * 1000, 1)
+        _log_trace(question, trace)
+        result = {"answer": answer, "sql": sql, "data": rows_data[:50], "columns": columns, "trace": trace}
         return result
 
     @staticmethod
@@ -191,12 +228,23 @@ class QaService:
                         seen.add(k)
                         all_data.append(row)
 
+            trace = {}
+            if sub_results:
+                for r in sub_results:
+                    if "trace" in r:
+                        for k, v in r["trace"].items():
+                            trace.setdefault(k, 0)
+                            if isinstance(v, (int, float)):
+                                trace[k] = round(trace[k] + v, 1)
+            _log_trace(question, trace)
+
             return {
                 "answer": answer,
                 "sql": all_sql,
                 "data": all_data[:50],
                 "columns": sub_results[0].get("columns", []) if sub_results else [],
                 "decomposed": True,
+                "trace": trace,
             }
 
         result = QaService.run_qa_pipeline(question, question_with_context, schema, history, uid)

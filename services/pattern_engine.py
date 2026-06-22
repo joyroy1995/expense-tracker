@@ -46,6 +46,11 @@ _SKIP_WORDS = frozenset({
 class PatternEngine:
     _CAT_SET = frozenset(c.lower() for c in _ALL_CATEGORIES)
     _CAT_MAP = {c.lower(): c for c in _ALL_CATEGORIES}
+    _MONTH_RE = re.compile(
+        r'\b(?:january|february|march|april|may|june|july|'
+        r'august|september|october|november|december)\b',
+        re.IGNORECASE,
+    )
 
     def __init__(self):
         self._d = _fmt_dates()
@@ -56,6 +61,10 @@ class PatternEngine:
 
         time_info = self._detect_time(q_lower)
         category = self._detect_category(q_lower)
+
+        if not time_info["clause"] and self._MONTH_RE.search(q_lower):
+            if not category:
+                return None
 
         for method in [
             self._match_budget,
