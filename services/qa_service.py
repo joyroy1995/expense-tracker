@@ -5,6 +5,7 @@ from config import TIMEZONE
 import database as db
 from llm import generate_sql, correct_sql, answer_from_results, format_answer, decompose_question, compose_answers, extract_date_reference
 from services.sql_service import SqlService
+from services.pattern_engine import PatternEngine
 
 
 COMPLEX_KEYWORDS = [
@@ -29,6 +30,7 @@ COMPLEX_KEYWORDS = [
 
 _schema_cache = None
 _schema_cache_time = 0
+_pattern_engine = PatternEngine()
 
 
 class QaService:
@@ -76,17 +78,33 @@ class QaService:
 
     @staticmethod
     def run_qa_pipeline(question, question_with_context, schema, history, uid, force_programmatic=False):
-        cached = db.get_cached_sql(question_with_context, schema)
+        cached = db.get_cached_response(question_with_context, schema)
         if cached:
-            sql = cached["sql"]
+            return {
+                "answer": cached["answer"],
+                "sql": cached["sql"],
+                "data": cached["response_data"].get("rows", []),
+                "columns": cached["response_data"].get("columns", []),
+                "from_cache": True,
+            }
+
+        sql = None
+        from_pattern = False
+        cached_sql = db.get_cached_sql(question_with_context, schema)
+        if cached_sql:
+            sql = cached_sql["sql"]
         else:
-            try:
-                sql = generate_sql(question_with_context, schema, history=history)
-            except Exception as e:
-                return {"error": f"LLM query failed: {str(e)}"}
-            if not sql:
-                return {"error": "Could not generate SQL query. Check API key."}
-            db.cache_qa_sql(question_with_context, sql, schema)
+            pattern_result = _pattern_engine.match(question)
+            if pattern_result:
+                sql = pattern_result[0]
+                from_pattern = True
+            else:
+                try:
+                    sql = generate_sql(question_with_context, schema, history=history)
+                except Exception as e:
+                    return {"error": f"LLM query failed: {str(e)}"}
+                if not sql:
+                    return {"error": "Could not generate SQL query. Check API key."}
 
         if not SqlService.validate_sql(sql):
             return {"error": "Generated query is not a valid SELECT statement", "sql": sql}
@@ -117,14 +135,22 @@ class QaService:
             else:
                 return {"error": f"Query execution failed: {str(e)}", "sql": sql}
 
-        if QaService.needs_llm_answer(question) and not force_programmatic:
+        if from_pattern:
+            answer = format_answer(columns, rows_data, question)
+        elif QaService.needs_llm_answer(question) and not force_programmatic:
             answer = answer_from_results(question, sql, rows_data[:20], history=history)
             if not answer:
                 answer = format_answer(columns, rows_data, question)
         else:
             answer = format_answer(columns, rows_data, question)
 
-        return {"answer": answer, "sql": sql, "data": rows_data[:50], "columns": columns}
+        result = {"answer": answer, "sql": sql, "data": rows_data[:50], "columns": columns}
+
+        if not from_pattern:
+            db.cache_qa_sql(question_with_context, sql, schema)
+        db.cache_response(question_with_context, sql, {"rows": rows_data[:50], "columns": columns}, answer, schema)
+
+        return result
 
     @staticmethod
     def answer_question(question, history, uid):

@@ -452,6 +452,89 @@ def _run_migrations():
             )
             conn.commit()
 
+    with engine.connect() as conn:
+        result = conn.execute(
+            text("SELECT COUNT(*) FROM migrations WHERE name = 'qa_cache_features'")
+        )
+        if result.fetchone()[0] == 0:
+            if _is_postgres():
+                for col in ['intent', 'category', 'time_period', 'item_keyword']:
+                    conn.execute(text(f"ALTER TABLE qa_cache ADD COLUMN IF NOT EXISTS {col} TEXT"))
+                conn.execute(text("""
+                    CREATE TABLE IF NOT EXISTS qa_response_cache (
+                        id SERIAL PRIMARY KEY,
+                        query_hash TEXT NOT NULL,
+                        question TEXT NOT NULL,
+                        schema_hash TEXT NOT NULL,
+                        sql TEXT NOT NULL,
+                        response_json TEXT NOT NULL,
+                        answer_json TEXT NOT NULL,
+                        data_version INTEGER DEFAULT 0,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )
+                """))
+                conn.execute(text("""
+                    CREATE TABLE IF NOT EXISTS app_metadata (
+                        key TEXT PRIMARY KEY,
+                        value TEXT NOT NULL
+                    )
+                """))
+            else:
+                pragma = conn.execute(text("PRAGMA table_info(qa_cache)")).fetchall()
+                existing_cols = {r[1] for r in pragma}
+                for col in ['intent', 'category', 'time_period', 'item_keyword']:
+                    if col not in existing_cols:
+                        conn.execute(text(f"ALTER TABLE qa_cache ADD COLUMN {col} TEXT"))
+                conn.execute(text("""
+                    CREATE TABLE IF NOT EXISTS qa_response_cache (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        query_hash TEXT NOT NULL,
+                        question TEXT NOT NULL,
+                        schema_hash TEXT NOT NULL,
+                        sql TEXT NOT NULL,
+                        response_json TEXT NOT NULL,
+                        answer_json TEXT NOT NULL,
+                        data_version INTEGER DEFAULT 0,
+                        created_at TEXT DEFAULT CURRENT_TIMESTAMP
+                    )
+                """))
+                conn.execute(text("""
+                    CREATE TABLE IF NOT EXISTS app_metadata (
+                        key TEXT PRIMARY KEY,
+                        value TEXT NOT NULL
+                    )
+                """))
+            conn.execute(
+                text("CREATE INDEX IF NOT EXISTS idx_response_cache_hash ON qa_response_cache(query_hash, schema_hash)")
+            )
+            conn.execute(
+                text("INSERT OR IGNORE INTO app_metadata (key, value) VALUES ('data_version', '1')")
+            )
+            now = datetime.now(TIMEZONE).strftime("%Y-%m-%d %H:%M:%S")
+            conn.execute(
+                text("INSERT INTO migrations (name, applied_at) VALUES ('qa_cache_features', :n)"),
+                {"n": now},
+            )
+            conn.commit()
+
+
+def get_data_version():
+    engine = get_engine()
+    with engine.connect() as conn:
+        row = conn.execute(
+            text("SELECT value FROM app_metadata WHERE key = 'data_version'")
+        ).fetchone()
+        return int(row[0]) if row else 1
+
+
+def bump_data_version():
+    engine = get_engine()
+    with engine.connect() as conn:
+        conn.execute(
+            text("UPDATE app_metadata SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT) WHERE key = 'data_version'")
+        )
+        conn.commit()
+
 
 def _seed_superuser():
     from config import USERNAME, PASSWORD

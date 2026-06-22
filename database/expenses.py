@@ -1,7 +1,7 @@
 from datetime import datetime
 from sqlalchemy import text
 from config import TIMEZONE
-from database.engine import get_connection, _is_postgres
+from database.engine import get_connection, _is_postgres, bump_data_version
 
 
 def _user_filter(user_id):
@@ -39,6 +39,7 @@ def add_expense(date, description, amount, category, user_id=1):
     else:
         expense_id = result.lastrowid
     conn.commit()
+    bump_data_version()
     return expense_id
 
 
@@ -316,3 +317,4 @@ def delete_expense(expense_id):
         text("DELETE FROM expenses WHERE id = :id"), {"id": expense_id}
     )
     conn.commit()
+    bump_data_version()

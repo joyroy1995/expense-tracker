@@ -1,9 +1,10 @@
 import hashlib
 import re
-from datetime import datetime
+import json
+from datetime import datetime, timedelta
 from sqlalchemy import text
 from config import TIMEZONE
-from database.engine import get_connection
+from database.engine import get_connection, get_data_version, bump_data_version
 
 
 _ALL_CATEGORIES = [
@@ -17,6 +18,8 @@ SCHEMA_VERSION = 3
 
 OVERALL_BUDGET_CATEGORY = "__overall__"
 
+_RESPONSE_CACHE_TTL_SECONDS = 60
+
 _STOP_WORDS = frozenset({
     "me", "my", "the", "a", "an", "did", "do", "does", "is", "are",
     "was", "were", "of", "in", "on", "at", "to", "for", "with",
@@ -26,9 +29,82 @@ _STOP_WORDS = frozenset({
     "am", "be", "been", "being", "have", "has", "had", "do", "does",
     "did", "but", "or", "if", "so", "up", "down", "out", "just",
     "about", "than", "too", "also", "very", "some", "any", "every",
+    "overall",
 })
 
 _FUZZY_THRESHOLD = 0.75
+
+_INTENT_PATTERNS = [
+    ("budget", r'\bbudget\b'),
+    ("pacing", r'\b(?:on\s+track|pacing)\b'),
+    ("compare", r'\b(?:compare|vs|versus)\b'),
+    ("breakdown", r'\b(?:breakdown|by\s+category|category\s+wise)\b'),
+    ("average", r'\b(?:average|avg)\b'),
+    ("how_many", r'\b(?:how\s+many|how\s+often|count|frequency)\b'),
+    ("most_expensive", r'\b(?:most\s+expensive|biggest\s+expense|largest\s+expense)\b'),
+    ("top_n", r'\b(?:top|first|biggest|largest)\s+\d+\b'),
+    ("how_much", r'\b(?:how\s+much|total|sum|amount|spent|spend)\b'),
+    ("show", r'\b(?:show|list|display|find|view)\b'),
+]
+
+
+def _extract_intent(question):
+    q_lower = question.lower()
+    for intent, pattern in _INTENT_PATTERNS:
+        if re.search(pattern, q_lower):
+            return intent
+    return "general"
+
+
+def _extract_category(question, categories=None):
+    q_lower = question.lower()
+    cats = categories or _ALL_CATEGORIES
+    for cat in sorted(cats, key=lambda x: -len(x)):
+        if cat.lower() in q_lower:
+            return cat
+    return None
+
+
+def _extract_time_period(question):
+    q_lower = question.lower()
+    if re.search(r'\bthis\s+month\b', q_lower): return "this_month"
+    if re.search(r'\blast\s+month\b', q_lower): return "last_month"
+    if re.search(r'\btoday\b', q_lower): return "today"
+    if re.search(r'\byesterday\b', q_lower): return "yesterday"
+    if re.search(r'\bthis\s+week\b', q_lower): return "this_week"
+    if re.search(r'\blast\s+week\b', q_lower): return "last_week"
+    if re.search(r'\bthis\s+year\b', q_lower): return "this_year"
+    m = re.search(r'\blast\s+(\d+)\s+days?\b', q_lower)
+    if m: return f"last_{m.group(1)}_days"
+    return None
+
+
+def _extract_features(question):
+    return {
+        "intent": _extract_intent(question),
+        "category": _extract_category(question),
+        "time_period": _extract_time_period(question),
+    }
+
+
+def _normalize_question(q):
+    q = q.lower()
+    q = re.sub(r'[^\w\s]', ' ', q)
+    q = re.sub(r'\s+', ' ', q).strip()
+    tokens = [w for w in q.split() if w not in _STOP_WORDS and len(w) > 1]
+    return ' '.join(sorted(set(tokens)))
+
+
+def _schema_hash(schema_str):
+    return hashlib.sha256(schema_str.encode()).hexdigest()[:16]
+
+
+def _features_match(a, b):
+    if a["intent"] and b["intent"] and a["intent"] != b["intent"]:
+        return False
+    if a["category"] and b["category"] and a["category"] != b["category"]:
+        return False
+    return True
 
 
 def get_schema():
@@ -94,46 +170,6 @@ Semantics: budgets are recurring monthly limits. A budget resets each month.
 """
 
 
-def _normalize_question(q):
-    q = q.lower()
-    q = re.sub(r'[^\w\s]', ' ', q)
-    q = re.sub(r'\s+', ' ', q).strip()
-    tokens = [w for w in q.split() if w not in _STOP_WORDS and len(w) > 1]
-    return ' '.join(sorted(set(tokens)))
-
-
-def _schema_hash(schema_str):
-    return hashlib.sha256(schema_str.encode()).hexdigest()[:16]
-
-
-def cache_qa_sql(question, sql, schema_str):
-    conn = get_connection()
-    normalized = _normalize_question(question)
-    qhash = hashlib.sha256(normalized.encode()).hexdigest()
-    shash = _schema_hash(schema_str)
-    now = datetime.now(TIMEZONE).strftime("%Y-%m-%d %H:%M:%S")
-
-    existing = conn.execute(
-        text("SELECT id, hit_count FROM qa_cache WHERE query_hash = :h AND schema_hash = :s"),
-        {"h": qhash, "s": shash},
-    ).fetchone()
-
-    if existing:
-        conn.execute(
-            text("UPDATE qa_cache SET last_used_at = :n, hit_count = hit_count + 1 WHERE id = :id"),
-            {"n": now, "id": existing[0]},
-        )
-    else:
-        conn.execute(
-            text("""
-                INSERT INTO qa_cache (query_hash, normalized_query, sql, schema_hash, last_used_at, created_at)
-                VALUES (:h, :nq, :sql, :sh, :n, :n)
-            """),
-            {"h": qhash, "nq": normalized, "sql": sql, "sh": shash, "n": now},
-        )
-    conn.commit()
-
-
 def _token_jaccard(a, b):
     if not a or not b:
         return 0.0
@@ -146,11 +182,49 @@ def _token_jaccard(a, b):
     return len(intersection) / len(sa | sb)
 
 
+def cache_qa_sql(question, sql, schema_str):
+    conn = get_connection()
+    normalized = _normalize_question(question)
+    qhash = hashlib.sha256(normalized.encode()).hexdigest()
+    shash = _schema_hash(schema_str)
+    features = _extract_features(question)
+    now = datetime.now(TIMEZONE).strftime("%Y-%m-%d %H:%M:%S")
+
+    existing = conn.execute(
+        text("SELECT id, hit_count FROM qa_cache WHERE query_hash = :h AND schema_hash = :s"),
+        {"h": qhash, "s": shash},
+    ).fetchone()
+
+    if existing:
+        conn.execute(
+            text("""
+                UPDATE qa_cache SET last_used_at = :n, hit_count = hit_count + 1,
+                intent = :it, category = :cat, time_period = :tp
+                WHERE id = :id
+            """),
+            {"n": now, "it": features["intent"], "cat": features["category"],
+             "tp": features["time_period"], "id": existing[0]},
+        )
+    else:
+        conn.execute(
+            text("""
+                INSERT INTO qa_cache (query_hash, normalized_query, sql, schema_hash,
+                    intent, category, time_period, last_used_at, created_at)
+                VALUES (:h, :nq, :sql, :sh, :it, :cat, :tp, :n, :n)
+            """),
+            {"h": qhash, "nq": normalized, "sql": sql, "sh": shash,
+             "it": features["intent"], "cat": features["category"],
+             "tp": features["time_period"], "n": now},
+        )
+    conn.commit()
+
+
 def get_cached_sql(question, schema_str):
     conn = get_connection()
     normalized = _normalize_question(question)
     qhash = hashlib.sha256(normalized.encode()).hexdigest()
     shash = _schema_hash(schema_str)
+    features = _extract_features(question)
 
     row = conn.execute(
         text("""
@@ -164,7 +238,10 @@ def get_cached_sql(question, schema_str):
         return {"sql": row[0], "hit": True}
 
     rows = conn.execute(
-        text("SELECT normalized_query, sql FROM qa_cache WHERE schema_hash = :s"),
+        text("""
+            SELECT normalized_query, sql, intent, category, time_period
+            FROM qa_cache WHERE schema_hash = :s
+        """),
         {"s": shash},
     ).fetchall()
 
@@ -173,11 +250,16 @@ def get_cached_sql(question, schema_str):
     best_score = 0.0
 
     for r in rows:
+        cached_features = {"intent": r[2], "category": r[3], "time_period": r[4]}
+        if not _features_match(features, cached_features):
+            continue
+
         cached_tokens = set(r[0].split())
         if norm_tokens and cached_tokens and (norm_tokens <= cached_tokens or cached_tokens <= norm_tokens):
             score = len(norm_tokens & cached_tokens) / min(len(norm_tokens), len(cached_tokens))
         else:
             score = _token_jaccard(normalized, r[0])
+
         if score > best_score:
             best_score = score
             best_sql = r[1]
@@ -185,3 +267,69 @@ def get_cached_sql(question, schema_str):
     if best_score >= _FUZZY_THRESHOLD and best_sql:
         return {"sql": best_sql, "hit": False}
     return None
+
+
+def cache_response(question, sql, response_data, answer, schema_str):
+    conn = get_connection()
+    normalized = _normalize_question(question)
+    qhash = hashlib.sha256(normalized.encode()).hexdigest()
+    shash = _schema_hash(schema_str)
+    data_version = get_data_version()
+    now = datetime.now(TIMEZONE).strftime("%Y-%m-%d %H:%M:%S")
+
+    conn.execute(
+        text("""
+            DELETE FROM qa_response_cache
+            WHERE query_hash = :h AND schema_hash = :s
+        """),
+        {"h": qhash, "s": shash},
+    )
+
+    conn.execute(
+        text("""
+            INSERT INTO qa_response_cache
+                (query_hash, question, schema_hash, sql, response_json, answer_json, data_version, created_at)
+            VALUES (:h, :q, :s, :sql, :rj, :aj, :dv, :n)
+        """),
+        {"h": qhash, "q": question, "s": shash, "sql": sql,
+         "rj": json.dumps(response_data), "aj": json.dumps(answer),
+         "dv": data_version, "n": now},
+    )
+    conn.commit()
+
+
+def get_cached_response(question, schema_str):
+    conn = get_connection()
+    normalized = _normalize_question(question)
+    qhash = hashlib.sha256(normalized.encode()).hexdigest()
+    shash = _schema_hash(schema_str)
+    current_version = get_data_version()
+
+    row = conn.execute(
+        text("""
+            SELECT response_json, answer_json, sql, created_at, data_version
+            FROM qa_response_cache
+            WHERE query_hash = :h AND schema_hash = :s
+            ORDER BY created_at DESC LIMIT 1
+        """),
+        {"h": qhash, "s": shash},
+    ).fetchone()
+
+    if not row:
+        return None
+
+    data_version = row[4]
+    created_at = datetime.strptime(row[3], "%Y-%m-%d %H:%M:%S").replace(tzinfo=TIMEZONE)
+    age = datetime.now(TIMEZONE) - created_at
+
+    if data_version != current_version:
+        return None
+
+    if age.total_seconds() > _RESPONSE_CACHE_TTL_SECONDS:
+        return None
+
+    return {
+        "response_data": json.loads(row[0]),
+        "answer": json.loads(row[1]),
+        "sql": row[2],
+    }

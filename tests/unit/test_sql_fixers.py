@@ -280,6 +280,11 @@ class TestFixOrdinalLimit:
         result = _fix_ordinal_limit(sql, "5th most expensive")
         assert "OFFSET 4" in result
 
+    def test_skips_aggregate_sql(self):
+        sql = "SELECT COALESCE(SUM(amount), 0) as total FROM expenses WHERE user_id = :uid"
+        result = _fix_ordinal_limit(sql, "how much on 5th june")
+        assert result == sql
+
 
 # ── _fix_most_expensive_sql ─────────────────────────────────
 
@@ -430,6 +435,11 @@ class TestExtractItemKeyword:
     def test_bought_with_article(self):
         assert _extract_item_keyword("bought a phone") == "phone"
 
+    def test_skips_ordinal_numbers(self):
+        assert _extract_item_keyword("spent on 5th june") is None
+        assert _extract_item_keyword("spent on 1st january") is None
+        assert _extract_item_keyword("spent on 10th") is None
+
 
 # ── _fix_description_filter ─────────────────────────────────
 
@@ -453,6 +463,11 @@ class TestFixDescriptionFilter:
     def test_skips_if_keyword_is_category(self):
         sql = "SELECT * FROM expenses WHERE user_id = :uid"
         result = _fix_description_filter(sql, "how much on food")
+        assert result == sql
+
+    def test_skips_overall_keyword(self):
+        sql = "SELECT * FROM expenses WHERE user_id = :uid"
+        result = _fix_description_filter(sql, "how much on overall total this month")
         assert result == sql
 
 

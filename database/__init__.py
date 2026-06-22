@@ -6,8 +6,10 @@ from database.engine import (
     _is_postgres,
     _run_migrations,
     _seed_superuser,
+    bump_data_version,
     close_connection,
     get_connection,
+    get_data_version,
     get_engine,
 )
 from database.users import (
@@ -83,7 +85,9 @@ from database.qa_cache import (
     _STOP_WORDS,
     SCHEMA_VERSION,
     cache_qa_sql,
+    cache_response,
     get_cached_sql,
+    get_cached_response,
     get_schema,
 )
 from sqlalchemy import text
@@ -109,6 +113,8 @@ __all__ = [
     "add_expense",
     "add_recurring",
     "cache_qa_sql",
+    "cache_response",
+    "bump_data_version",
     "close_connection",
     "compute_next_date",
     "create_reset_token",
@@ -123,6 +129,8 @@ __all__ = [
     "get_budget_status",
     "get_budgets",
     "get_cached_sql",
+    "get_cached_response",
+    "get_data_version",
     "get_category_totals_by_month",
     "get_daily_average",
     "get_daily_totals",

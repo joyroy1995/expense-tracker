@@ -2,6 +2,7 @@ import re
 from datetime import datetime, timedelta
 from config import TIMEZONE
 from database import _ALL_CATEGORIES
+from services.sql_ast import add_condition, remove_condition, replace_condition, has_condition
 
 
 _KNOWN_TABLES = {"expenses", "users", "budgets", "learned_categories", "password_resets"}
@@ -19,6 +20,7 @@ _SKIP_WORDS = frozenset({
     'highest', 'lowest', 'best', 'worst', 'recent', 'last', 'first',
     'previous', 'next', 'top', 'bottom',
     'today', 'todays', 'tonight', 'yesterday', 'yesterdays',
+    'overall',
 })
 
 _SORT_COL_MAP = {
@@ -85,32 +87,21 @@ class SqlService:
                 mentioned = cat
                 break
         if not mentioned:
-            if re.search(r"(?:b\.)?category\s*=\s*'__overall__'", sql, re.IGNORECASE):
+            if has_condition(sql, "__overall__"):
                 return sql
-            sql = re.sub(
-                r'\s+AND\s+(?:b\.)?category\s*=\s*\'[^\']*\'',
-                '', sql, flags=re.IGNORECASE,
-            )
-            sql = re.sub(
-                r'\s+WHERE\s+(?:b\.)?category\s*=\s*\'[^\']*\' AND ',
-                ' WHERE ', sql, flags=re.IGNORECASE,
-            )
+            sql = remove_condition(sql, "category =")
             return sql
-        m = re.search(r"(?:b\.)?category\s*=\s*'([^']+)'", sql)
-        if not m:
-            insert_at = len(sql)
-            for kw in [' GROUP BY ', ' ORDER BY ', ' LIMIT ', ' OFFSET ', ' HAVING ']:
-                pos = sql.upper().find(kw)
-                if pos != -1 and pos < insert_at:
-                    insert_at = pos
-            sql = sql[:insert_at] + f" AND category = '{mentioned}'" + sql[insert_at:]
-            return sql
-        sql_cat = m.group(1)
-        if sql_cat == mentioned or sql_cat == "__overall__":
-            return sql
-        sql = sql.replace(f"category = '{sql_cat}'", f"category = '{mentioned}'", 1)
-        sql = sql.replace(f"b.category = '{sql_cat}'", f"b.category = '{mentioned}'", 1)
-        return sql
+        if has_condition(sql, "category ="):
+            for cat in _ALL_CATEGORIES:
+                if f"category = '{cat}'" in sql or f"b.category = '{cat}'" in sql:
+                    sql_cat = cat
+                    break
+            else:
+                return add_condition(sql, f"category = '{mentioned}'")
+            if sql_cat == mentioned or sql_cat == "__overall__":
+                return sql
+            return replace_condition(sql, "category =", f"category = '{mentioned}'")
+        return add_condition(sql, f"category = '{mentioned}'")
 
     @staticmethod
     def fix_sort_order(sql, question):
@@ -199,6 +190,8 @@ class SqlService:
     def fix_ordinal_limit(sql, question):
         m = re.search(r'\b(second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|\d+(?:st|nd|rd|th))\b', question, re.IGNORECASE)
         if not m:
+            return sql
+        if re.search(r'\b(?:SUM|COUNT|AVG|COALESCE)\s*\(', sql, re.IGNORECASE):
             return sql
         word = m.group(1).lower()
         if word in _ORDINAL_MAP:
@@ -347,42 +340,36 @@ class SqlService:
         m = re.search(r'\b(?:bought|buy|purchase|purchased|get|got)\s+(?:a\s+|an\s+|the\s+|some\s+)?(\w+)', q)
         if m:
             word = m.group(1).strip()
-            if word not in _SKIP_WORDS:
+            if word not in _SKIP_WORDS and not re.match(r'\d+(?:st|nd|rd|th)$', word):
                 return word
         m = re.search(r'\b(?:spent|spend)\s+on\s+(?:a\s+|an\s+|the\s+)?(\w+(?:\s+\w+)?)', q)
         if m:
             word = m.group(1).strip().split()[0]
-            if word not in _SKIP_WORDS:
+            if word not in _SKIP_WORDS and not re.match(r'\d+(?:st|nd|rd|th)$', word):
                 return word
         m = re.search(r'\bhow\s+much\s+(?:on|for)\s+(?:a\s+|an\s+|the\s+)?(\w+)', q)
         if m:
             word = m.group(1).strip()
-            if word not in _SKIP_WORDS:
+            if word not in _SKIP_WORDS and not re.match(r'\d+(?:st|nd|rd|th)$', word):
                 return word
         m = re.search(r'\b(\w+)\s+expenses?\b', q)
         if m:
             word = m.group(1).strip()
-            if word not in _SKIP_WORDS:
+            if word not in _SKIP_WORDS and not re.match(r'\d+(?:st|nd|rd|th)$', word):
                 return word
         return None
 
     @staticmethod
     def fix_description_filter(sql, question):
         q = question.lower()
-        if re.search(r"description\s+LIKE", sql, re.IGNORECASE):
+        if has_condition(sql, "description LIKE"):
             return sql
-        if re.search(r"category\s*=", sql, re.IGNORECASE):
+        if has_condition(sql, "category ="):
             return sql
         keyword = SqlService._extract_item_keyword(q)
         if not keyword or len(keyword) < 2 or keyword in [c.lower() for c in _ALL_CATEGORIES] or keyword.endswith('est'):
             return sql
-        insert_at = len(sql)
-        for kw in [' ORDER BY ', ' GROUP BY ', ' LIMIT ', ' OFFSET ', ' HAVING ']:
-            pos = sql.upper().find(kw)
-            if pos != -1 and pos < insert_at:
-                insert_at = pos
-        clause = f" AND LOWER(description) LIKE '%{keyword}%'"
-        return sql[:insert_at] + clause + sql[insert_at:]
+        return add_condition(sql, f"LOWER(description) LIKE '%{keyword}%'")
 
     @staticmethod
     def fix_aggregate_sql(sql, question):

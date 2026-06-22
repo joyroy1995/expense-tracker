@@ -929,7 +929,7 @@ class TestAskAPI:
     def test_ask_with_bad_sql_returns_error(self, auth_client, seed_expenses):
         with patch("services.qa_service.generate_sql") as mock_gen:
             mock_gen.return_value = "DROP TABLE expenses"
-            resp = auth_client.post("/api/ask", json={"question": "how much?"})
+            resp = auth_client.post("/api/ask", json={"question": "generate a bad sql query"})
             assert resp.status_code == 500
             data = resp.get_json()
             assert "error" in data or "sql" in data
