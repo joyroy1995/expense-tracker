@@ -319,7 +319,10 @@ def get_cached_response(question, schema_str):
         return None
 
     data_version = row[4]
-    created_at = datetime.strptime(row[3], "%Y-%m-%d %H:%M:%S").replace(tzinfo=TIMEZONE)
+    created_at = row[3]
+    if isinstance(created_at, str):
+        created_at = datetime.strptime(created_at, "%Y-%m-%d %H:%M:%S")
+    created_at = created_at.replace(tzinfo=TIMEZONE)
     age = datetime.now(TIMEZONE) - created_at
 
     if data_version != current_version:
