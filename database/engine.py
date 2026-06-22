@@ -507,9 +507,14 @@ def _run_migrations():
             conn.execute(
                 text("CREATE INDEX IF NOT EXISTS idx_response_cache_hash ON qa_response_cache(query_hash, schema_hash)")
             )
-            conn.execute(
-                text("INSERT OR IGNORE INTO app_metadata (key, value) VALUES ('data_version', '1')")
-            )
+            if _is_postgres():
+                conn.execute(
+                    text("INSERT INTO app_metadata (key, value) VALUES ('data_version', '1') ON CONFLICT (key) DO NOTHING")
+                )
+            else:
+                conn.execute(
+                    text("INSERT OR IGNORE INTO app_metadata (key, value) VALUES ('data_version', '1')")
+                )
             now = datetime.now(TIMEZONE).strftime("%Y-%m-%d %H:%M:%S")
             conn.execute(
                 text("INSERT INTO migrations (name, applied_at) VALUES ('qa_cache_features', :n)"),
@@ -520,20 +525,26 @@ def _run_migrations():
 
 def get_data_version():
     engine = get_engine()
-    with engine.connect() as conn:
-        row = conn.execute(
-            text("SELECT value FROM app_metadata WHERE key = 'data_version'")
-        ).fetchone()
-        return int(row[0]) if row else 1
+    try:
+        with engine.connect() as conn:
+            row = conn.execute(
+                text("SELECT value FROM app_metadata WHERE key = 'data_version'")
+            ).fetchone()
+            return int(row[0]) if row else 1
+    except Exception:
+        return 1
 
 
 def bump_data_version():
     engine = get_engine()
-    with engine.connect() as conn:
-        conn.execute(
-            text("UPDATE app_metadata SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT) WHERE key = 'data_version'")
-        )
-        conn.commit()
+    try:
+        with engine.connect() as conn:
+            conn.execute(
+                text("UPDATE app_metadata SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT) WHERE key = 'data_version'")
+            )
+            conn.commit()
+    except Exception:
+        pass
 
 
 def _seed_superuser():
