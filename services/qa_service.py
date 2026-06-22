@@ -110,19 +110,20 @@ class QaService:
         from_sql_cache = False
 
         t = _time.time()
-        cached_sql = db.get_cached_sql(question_with_context, schema)
-        trace["sql_cache"] = round((_time.time() - t) * 1000, 1)
-        if cached_sql:
-            sql = cached_sql["sql"]
-            from_sql_cache = True
+        pattern_result = _pattern_engine.match(question)
+        trace["pattern_engine"] = round((_time.time() - t) * 1000, 1)
+        if pattern_result:
+            sql = pattern_result[0]
+            from_pattern = True
+            trace["source"] = "pattern"
         else:
             t = _time.time()
-            pattern_result = _pattern_engine.match(question)
-            trace["pattern_engine"] = round((_time.time() - t) * 1000, 1)
-            if pattern_result:
-                sql = pattern_result[0]
-                from_pattern = True
-                trace["source"] = "pattern"
+            cached_sql = db.get_cached_sql(question_with_context, schema)
+            trace["sql_cache"] = round((_time.time() - t) * 1000, 1)
+            if cached_sql:
+                sql = cached_sql["sql"]
+                from_sql_cache = True
+                trace["source"] = "sql_cache"
             else:
                 t = _time.time()
                 try:
