@@ -287,7 +287,7 @@ class PatternEngine:
         days_elapsed = max(d['days_elapsed'], 1)
         sql = (
             f"SELECT COALESCE(SUM(amount), 0) as total, "
-            f"ROUND(COALESCE(SUM(amount), 0) / {days_elapsed}, 0) as daily_avg, "
+            f"ROUND(CAST(COALESCE(SUM(amount), 0) / {days_elapsed} AS numeric), 0) as daily_avg, "
             f"{days_elapsed} as days_elapsed, {d['days_in_month']} as days_in_month "
             f"FROM expenses WHERE user_id = :uid AND date LIKE '{d['current_month']}%'"
         )

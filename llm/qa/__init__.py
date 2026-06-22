@@ -98,7 +98,7 @@ Q: Average daily spending this month
 SQL: SELECT COALESCE(AVG(daily.total), 0) as avg_daily FROM (SELECT SUM(amount) as total FROM expenses WHERE user_id = :uid AND date LIKE '{current_month}%' GROUP BY date) daily
 
 Q: Am I on track with my spending this month?
-SQL: SELECT COALESCE(SUM(amount), 0) as total, ROUND(COALESCE(SUM(amount), 0) / {days_elapsed}, 0) as daily_avg, {days_elapsed} as days_elapsed, {days_in_month} as days_in_month FROM expenses WHERE user_id = :uid AND date LIKE '{current_month}%'
+SQL: SELECT COALESCE(SUM(amount), 0) as total, ROUND(CAST(COALESCE(SUM(amount), 0) / {days_elapsed} AS numeric), 0) as daily_avg, {days_elapsed} as days_elapsed, {days_in_month} as days_in_month FROM expenses WHERE user_id = :uid AND date LIKE '{current_month}%'
 
 Q: How many times did I eat out this month?
 SQL: SELECT COUNT(*) as count FROM expenses WHERE user_id = :uid AND category = 'Dining Out' AND date LIKE '{current_month}%'
