@@ -1,7 +1,7 @@
 import hashlib
-import re
 import json
-from datetime import datetime, timedelta
+import re
+from datetime import datetime
 from sqlalchemy import text
 from config import TIMEZONE
 from database.engine import get_connection, get_data_version, bump_data_version
@@ -32,62 +32,6 @@ _STOP_WORDS = frozenset({
     "overall",
 })
 
-_FUZZY_THRESHOLD = 0.75
-
-_INTENT_PATTERNS = [
-    ("budget", r'\bbudget\b'),
-    ("pacing", r'\b(?:on\s+track|pacing)\b'),
-    ("compare", r'\b(?:compare|vs|versus)\b'),
-    ("breakdown", r'\b(?:breakdown|by\s+category|category\s+wise)\b'),
-    ("average", r'\b(?:average|avg)\b'),
-    ("how_many", r'\b(?:how\s+many|how\s+often|count|frequency)\b'),
-    ("most_expensive", r'\b(?:most\s+expensive|biggest\s+expense|largest\s+expense)\b'),
-    ("top_n", r'\b(?:top|first|biggest|largest)\s+\d+\b'),
-    ("how_much", r'\b(?:how\s+much|total|sum|amount|spent|spend)\b'),
-    ("show", r'\b(?:show|list|display|find|view)\b'),
-]
-
-
-def _extract_intent(question):
-    q_lower = question.lower()
-    for intent, pattern in _INTENT_PATTERNS:
-        if re.search(pattern, q_lower):
-            return intent
-    return "general"
-
-
-def _extract_category(question, categories=None):
-    q_lower = question.lower()
-    cats = categories or _ALL_CATEGORIES
-    for cat in sorted(cats, key=lambda x: -len(x)):
-        if cat.lower() in q_lower:
-            return cat
-    return None
-
-
-def _extract_time_period(question):
-    q_lower = question.lower()
-    m = re.search(r'referring to date (\d{4}-\d{2}-\d{2})', q_lower)
-    date_ref = m.group(1) if m else None
-    if re.search(r'\bthis\s+month\b', q_lower): return f"this_month|{date_ref}" if date_ref else "this_month"
-    if re.search(r'\blast\s+month\b', q_lower): return f"last_month|{date_ref}" if date_ref else "last_month"
-    if re.search(r'\btoday\b', q_lower): return f"today|{date_ref}" if date_ref else "today"
-    if re.search(r'\byesterday\b', q_lower): return f"yesterday|{date_ref}" if date_ref else "yesterday"
-    if re.search(r'\bthis\s+week\b', q_lower): return f"this_week|{date_ref}" if date_ref else "this_week"
-    if re.search(r'\blast\s+week\b', q_lower): return f"last_week|{date_ref}" if date_ref else "last_week"
-    if re.search(r'\bthis\s+year\b', q_lower): return f"this_year|{date_ref}" if date_ref else "this_year"
-    m = re.search(r'\blast\s+(\d+)\s+days?\b', q_lower)
-    if m: return f"last_{m.group(1)}_days|{date_ref}" if date_ref else f"last_{m.group(1)}_days"
-    return date_ref  # just the specific date if no recognized label
-
-
-def _extract_features(question):
-    return {
-        "intent": _extract_intent(question),
-        "category": _extract_category(question),
-        "time_period": _extract_time_period(question),
-    }
-
 
 def _normalize_question(q):
     q = q.lower()
@@ -99,16 +43,6 @@ def _normalize_question(q):
 
 def _schema_hash(schema_str):
     return hashlib.sha256(schema_str.encode()).hexdigest()[:16]
-
-
-def _features_match(a, b):
-    if a["intent"] and b["intent"] and a["intent"] != b["intent"]:
-        return False
-    if a["category"] and b["category"] and a["category"] != b["category"]:
-        return False
-    if a["time_period"] and b["time_period"] and a["time_period"] != b["time_period"]:
-        return False
-    return True
 
 
 def get_schema():
@@ -172,105 +106,6 @@ Semantics: budgets are recurring monthly limits. A budget resets each month.
            (SELECT COALESCE(SUM(amount), 0) FROM expenses WHERE user_id = :uid
             AND date LIKE 'YYYY-MM%') as spent.
 """
-
-
-def _token_jaccard(a, b):
-    if not a or not b:
-        return 0.0
-    sa, sb = set(a.split()), set(b.split())
-    if not sa or not sb:
-        return 0.0
-    intersection = sa & sb
-    if not intersection:
-        return 0.0
-    return len(intersection) / len(sa | sb)
-
-
-def cache_qa_sql(question, sql, schema_str):
-    conn = get_connection()
-    normalized = _normalize_question(question)
-    qhash = hashlib.sha256(normalized.encode()).hexdigest()
-    shash = _schema_hash(schema_str)
-    features = _extract_features(question)
-    now = datetime.now(TIMEZONE).strftime("%Y-%m-%d %H:%M:%S")
-
-    existing = conn.execute(
-        text("SELECT id, hit_count FROM qa_cache WHERE query_hash = :h AND schema_hash = :s"),
-        {"h": qhash, "s": shash},
-    ).fetchone()
-
-    if existing:
-        conn.execute(
-            text("""
-                UPDATE qa_cache SET last_used_at = :n, hit_count = hit_count + 1,
-                intent = :it, category = :cat, time_period = :tp
-                WHERE id = :id
-            """),
-            {"n": now, "it": features["intent"], "cat": features["category"],
-             "tp": features["time_period"], "id": existing[0]},
-        )
-    else:
-        conn.execute(
-            text("""
-                INSERT INTO qa_cache (query_hash, normalized_query, sql, schema_hash,
-                    intent, category, time_period, last_used_at, created_at)
-                VALUES (:h, :nq, :sql, :sh, :it, :cat, :tp, :n, :n)
-            """),
-            {"h": qhash, "nq": normalized, "sql": sql, "sh": shash,
-             "it": features["intent"], "cat": features["category"],
-             "tp": features["time_period"], "n": now},
-        )
-    conn.commit()
-
-
-def get_cached_sql(question, schema_str):
-    conn = get_connection()
-    normalized = _normalize_question(question)
-    qhash = hashlib.sha256(normalized.encode()).hexdigest()
-    shash = _schema_hash(schema_str)
-    features = _extract_features(question)
-
-    row = conn.execute(
-        text("""
-            SELECT sql FROM qa_cache
-            WHERE query_hash = :h AND schema_hash = :s
-            ORDER BY last_used_at DESC LIMIT 1
-        """),
-        {"h": qhash, "s": shash},
-    ).fetchone()
-    if row:
-        return {"sql": row[0], "hit": True}
-
-    rows = conn.execute(
-        text("""
-            SELECT normalized_query, sql, intent, category, time_period
-            FROM qa_cache WHERE schema_hash = :s
-        """),
-        {"s": shash},
-    ).fetchall()
-
-    norm_tokens = set(normalized.split())
-    best_sql = None
-    best_score = 0.0
-
-    for r in rows:
-        cached_features = {"intent": r[2], "category": r[3], "time_period": r[4]}
-        if not _features_match(features, cached_features):
-            continue
-
-        cached_tokens = set(r[0].split())
-        if norm_tokens and cached_tokens and (norm_tokens <= cached_tokens or cached_tokens <= norm_tokens):
-            score = len(norm_tokens & cached_tokens) / min(len(norm_tokens), len(cached_tokens))
-        else:
-            score = _token_jaccard(normalized, r[0])
-
-        if score > best_score:
-            best_score = score
-            best_sql = r[1]
-
-    if best_score >= _FUZZY_THRESHOLD and best_sql:
-        return {"sql": best_sql, "hit": False}
-    return None
 
 
 def cache_response(question, sql, response_data, answer, schema_str):

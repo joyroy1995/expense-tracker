@@ -1,5 +1,5 @@
 import pytest
-from database import compute_next_date, _normalize_question, _schema_hash, _token_jaccard
+from database import compute_next_date, _normalize_question, _schema_hash
 
 
 class TestComputeNextDate:
@@ -101,25 +101,4 @@ class TestSchemaHash:
         assert _schema_hash("hello") != _schema_hash("world")
 
 
-class TestTokenJaccard:
-    def test_identical(self):
-        assert _token_jaccard("food transport", "food transport") == 1.0
 
-    def test_partial_overlap(self):
-        result = _token_jaccard("food transport", "food bills")
-        assert 0.3 < result < 0.5
-
-    def test_no_overlap(self):
-        assert _token_jaccard("food transport", "bills rent") == 0.0
-
-    def test_empty_first(self):
-        assert _token_jaccard("", "food transport") == 0.0
-
-    def test_empty_second(self):
-        assert _token_jaccard("food transport", "") == 0.0
-
-    def test_both_empty(self):
-        assert _token_jaccard("", "") == 0.0
-
-    def test_one_empty_token_set_after_split(self):
-        assert _token_jaccard("food", "") == 0.0

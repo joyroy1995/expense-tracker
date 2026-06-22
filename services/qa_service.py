@@ -107,7 +107,6 @@ class QaService:
 
         sql = None
         from_pattern = False
-        from_sql_cache = False
 
         t = _time.time()
         pattern_result = _pattern_engine.match(question)
@@ -118,22 +117,14 @@ class QaService:
             trace["source"] = "pattern"
         else:
             t = _time.time()
-            cached_sql = db.get_cached_sql(question_with_context, schema)
-            trace["sql_cache"] = round((_time.time() - t) * 1000, 1)
-            if cached_sql:
-                sql = cached_sql["sql"]
-                from_sql_cache = True
-                trace["source"] = "sql_cache"
-            else:
-                t = _time.time()
-                try:
-                    sql = generate_sql(question_with_context, schema, history=history)
-                except Exception as e:
-                    return {"error": f"LLM query failed: {str(e)}", "trace": trace}
-                trace["llm_gen"] = round((_time.time() - t) * 1000, 1)
-                if not sql:
-                    return {"error": "Could not generate SQL query. Check API key.", "trace": trace}
-                trace["source"] = "llm"
+            try:
+                sql = generate_sql(question_with_context, schema, history=history)
+            except Exception as e:
+                return {"error": f"LLM query failed: {str(e)}", "trace": trace}
+            trace["llm_gen"] = round((_time.time() - t) * 1000, 1)
+            if not sql:
+                return {"error": "Could not generate SQL query. Check API key.", "trace": trace}
+            trace["source"] = "llm"
 
         t = _time.time()
         if not SqlService.validate_sql(sql):
@@ -180,8 +171,6 @@ class QaService:
         trace["answer"] = round((_time.time() - t) * 1000, 1)
 
         t = _time.time()
-        if not from_pattern and not from_sql_cache:
-            db.cache_qa_sql(question_with_context, sql, schema)
         db.cache_response(question_with_context, sql, {"rows": rows_data[:50], "columns": columns}, answer, schema)
         trace["cache_write"] = round((_time.time() - t) * 1000, 1)
 

@@ -258,23 +258,6 @@ def _init_schema(conn):
     if _is_postgres():
         conn.execute(
             text("""
-                CREATE TABLE IF NOT EXISTS qa_cache (
-                    id SERIAL PRIMARY KEY,
-                    query_hash TEXT NOT NULL,
-                    normalized_query TEXT NOT NULL,
-                    sql TEXT NOT NULL,
-                    schema_hash TEXT NOT NULL,
-                    last_used_at TEXT DEFAULT CURRENT_TIMESTAMP,
-                    hit_count INTEGER DEFAULT 1,
-                    created_at TEXT DEFAULT CURRENT_TIMESTAMP
-                )
-            """)
-        )
-        conn.execute(
-            text("CREATE INDEX IF NOT EXISTS idx_qa_cache_hash ON qa_cache(query_hash)")
-        )
-        conn.execute(
-            text("""
                 CREATE TABLE IF NOT EXISTS push_subscriptions (
                     id SERIAL PRIMARY KEY,
                     user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -287,23 +270,6 @@ def _init_schema(conn):
             """)
         )
     else:
-        conn.execute(
-            text("""
-                CREATE TABLE IF NOT EXISTS qa_cache (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    query_hash TEXT NOT NULL,
-                    normalized_query TEXT NOT NULL,
-                    sql TEXT NOT NULL,
-                    schema_hash TEXT NOT NULL,
-                    last_used_at TEXT DEFAULT CURRENT_TIMESTAMP,
-                    hit_count INTEGER DEFAULT 1,
-                    created_at TEXT DEFAULT CURRENT_TIMESTAMP
-                )
-            """)
-        )
-        conn.execute(
-            text("CREATE INDEX IF NOT EXISTS idx_qa_cache_hash ON qa_cache(query_hash)")
-        )
         conn.execute(
             text("""
                 CREATE TABLE IF NOT EXISTS push_subscriptions (
@@ -458,8 +424,6 @@ def _run_migrations():
         )
         if result.fetchone()[0] == 0:
             if _is_postgres():
-                for col in ['intent', 'category', 'time_period', 'item_keyword']:
-                    conn.execute(text(f"ALTER TABLE qa_cache ADD COLUMN IF NOT EXISTS {col} TEXT"))
                 conn.execute(text("""
                     CREATE TABLE IF NOT EXISTS qa_response_cache (
                         id SERIAL PRIMARY KEY,
@@ -480,11 +444,6 @@ def _run_migrations():
                     )
                 """))
             else:
-                pragma = conn.execute(text("PRAGMA table_info(qa_cache)")).fetchall()
-                existing_cols = {r[1] for r in pragma}
-                for col in ['intent', 'category', 'time_period', 'item_keyword']:
-                    if col not in existing_cols:
-                        conn.execute(text(f"ALTER TABLE qa_cache ADD COLUMN {col} TEXT"))
                 conn.execute(text("""
                     CREATE TABLE IF NOT EXISTS qa_response_cache (
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
