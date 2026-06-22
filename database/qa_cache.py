@@ -67,16 +67,18 @@ def _extract_category(question, categories=None):
 
 def _extract_time_period(question):
     q_lower = question.lower()
-    if re.search(r'\bthis\s+month\b', q_lower): return "this_month"
-    if re.search(r'\blast\s+month\b', q_lower): return "last_month"
-    if re.search(r'\btoday\b', q_lower): return "today"
-    if re.search(r'\byesterday\b', q_lower): return "yesterday"
-    if re.search(r'\bthis\s+week\b', q_lower): return "this_week"
-    if re.search(r'\blast\s+week\b', q_lower): return "last_week"
-    if re.search(r'\bthis\s+year\b', q_lower): return "this_year"
+    m = re.search(r'referring to date (\d{4}-\d{2}-\d{2})', q_lower)
+    date_ref = m.group(1) if m else None
+    if re.search(r'\bthis\s+month\b', q_lower): return f"this_month|{date_ref}" if date_ref else "this_month"
+    if re.search(r'\blast\s+month\b', q_lower): return f"last_month|{date_ref}" if date_ref else "last_month"
+    if re.search(r'\btoday\b', q_lower): return f"today|{date_ref}" if date_ref else "today"
+    if re.search(r'\byesterday\b', q_lower): return f"yesterday|{date_ref}" if date_ref else "yesterday"
+    if re.search(r'\bthis\s+week\b', q_lower): return f"this_week|{date_ref}" if date_ref else "this_week"
+    if re.search(r'\blast\s+week\b', q_lower): return f"last_week|{date_ref}" if date_ref else "last_week"
+    if re.search(r'\bthis\s+year\b', q_lower): return f"this_year|{date_ref}" if date_ref else "this_year"
     m = re.search(r'\blast\s+(\d+)\s+days?\b', q_lower)
-    if m: return f"last_{m.group(1)}_days"
-    return None
+    if m: return f"last_{m.group(1)}_days|{date_ref}" if date_ref else f"last_{m.group(1)}_days"
+    return date_ref  # just the specific date if no recognized label
 
 
 def _extract_features(question):
@@ -103,6 +105,8 @@ def _features_match(a, b):
     if a["intent"] and b["intent"] and a["intent"] != b["intent"]:
         return False
     if a["category"] and b["category"] and a["category"] != b["category"]:
+        return False
+    if a["time_period"] and b["time_period"] and a["time_period"] != b["time_period"]:
         return False
     return True
 

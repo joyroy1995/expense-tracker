@@ -188,6 +188,16 @@ class SqlService:
 
     @staticmethod
     def fix_ordinal_limit(sql, question):
+        if re.search(
+            r'\b\d+(?:st|nd|rd|th)\s+(?:january|february|march|april|may|june|july|'
+            r'august|september|october|november|december)\b',
+            question, re.IGNORECASE,
+        ) or re.search(
+            r'\b(?:january|february|march|april|may|june|july|'
+            r'august|september|october|november|december)\s+\d+(?:st|nd|rd|th)\b',
+            question, re.IGNORECASE,
+        ):
+            return sql
         m = re.search(r'\b(second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|\d+(?:st|nd|rd|th))\b', question, re.IGNORECASE)
         if not m:
             return sql

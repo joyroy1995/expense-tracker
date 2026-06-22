@@ -285,6 +285,16 @@ class TestFixOrdinalLimit:
         result = _fix_ordinal_limit(sql, "how much on 5th june")
         assert result == sql
 
+    def test_skips_ordinal_in_date(self):
+        sql = "SELECT date, description, amount, category FROM expenses WHERE user_id = :uid AND date LIKE '2026-06%' ORDER BY amount DESC LIMIT 1"
+        result = _fix_ordinal_limit(sql, "What was my biggest expense on 5th june")
+        assert result == sql
+
+    def test_skips_ordinal_in_date_month_first(self):
+        sql = "SELECT * FROM expenses WHERE user_id = :uid LIMIT 50"
+        result = _fix_ordinal_limit(sql, "show me june 5th expenses")
+        assert result == sql
+
 
 # ── _fix_most_expensive_sql ─────────────────────────────────
 
