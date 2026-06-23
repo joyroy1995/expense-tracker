@@ -75,6 +75,25 @@ class QaService:
             'How does this month compare to last month',
             text, flags=re.IGNORECASE,
         )
+
+        text = re.sub(r'\bajke\b', 'today', text, flags=re.IGNORECASE)
+        text = re.sub(r'\bg[eo]t[oa]k[oa]l\b', 'yesterday', text, flags=re.IGNORECASE)
+        text = re.sub(r'\b(?:agami\s+)?kal\b', 'tomorrow', text, flags=re.IGNORECASE)
+        text = re.sub(r'\bei\s+m[ae]s{1,2}h\b', 'this month', text, flags=re.IGNORECASE)
+        text = re.sub(r'\bg[eo]t[oa]l\s+m[ae]s{1,2}h\b', 'last month', text, flags=re.IGNORECASE)
+        text = re.sub(r'\bag[ei]\s+m[ae]s{1,2}h\b', 'next month', text, flags=re.IGNORECASE)
+        text = re.sub(r'\bei\s+saptah\b', 'this week', text, flags=re.IGNORECASE)
+        text = re.sub(r'\bg[eo]t[oa]l\s+saptah\b', 'last week', text, flags=re.IGNORECASE)
+        text = re.sub(r'\bei\s+m[ea]s{1,2}h[eo]r\b', 'this year', text, flags=re.IGNORECASE)
+
+        text = re.sub(r'\bk[ou]t[oau]\b', 'how much', text, flags=re.IGNORECASE)
+        text = re.sub(r'\bd[eé]kh[auo]+n?\b', 'show', text, flags=re.IGNORECASE)
+        text = re.sub(r'\bk[oay]t[aio]\b', 'how many', text, flags=re.IGNORECASE)
+        text = re.sub(r'\bkoyta\b', 'how many', text, flags=re.IGNORECASE)
+        text = re.sub(r'\bkh[oau]r[oau]c[ho]\b', 'spending', text, flags=re.IGNORECASE)
+        text = re.sub(r'\bp[ou]r[ou]n[oau]\b', 'total', text, flags=re.IGNORECASE)
+        text = re.sub(r'\bpouro\b', 'total', text, flags=re.IGNORECASE)
+
         return text
 
     @staticmethod
@@ -160,6 +179,12 @@ class QaService:
         trace["exec"] = round((_time.time() - t) * 1000, 1)
 
         t = _time.time()
+        validation_issues = SqlService.validate_results(question, columns, rows_data)
+        if validation_issues:
+            trace["validation_issues"] = validation_issues
+        trace["validate"] = round((_time.time() - t) * 1000, 1)
+
+        t = _time.time()
         if from_pattern:
             answer = format_answer(columns, rows_data, question)
         elif QaService.needs_llm_answer(question) and not force_programmatic:
@@ -176,7 +201,23 @@ class QaService:
 
         trace["total"] = round((_time.time() - t0) * 1000, 1)
         _log_trace(question, trace)
-        result = {"answer": answer, "sql": sql, "data": rows_data[:50], "columns": columns, "trace": trace}
+
+        confidence = 0.8
+        if from_pattern:
+            confidence = 1.0
+        elif "corrected" in trace.get("source", ""):
+            confidence = 0.7
+        if not rows_data:
+            confidence = min(confidence, 0.4)
+        validation_issues = trace.get("validation_issues", [])
+        if validation_issues:
+            confidence = min(confidence, 0.5)
+
+        result = {
+            "answer": answer, "sql": sql,
+            "data": rows_data[:50], "columns": columns,
+            "trace": trace, "confidence": confidence,
+        }
         return result
 
     @staticmethod

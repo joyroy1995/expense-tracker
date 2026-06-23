@@ -1,6 +1,6 @@
 import re
 import calendar
-from datetime import date, timedelta
+from datetime import date, timedelta, datetime
 from database.qa_cache import _ALL_CATEGORIES
 
 
@@ -62,22 +62,34 @@ class PatternEngine:
         time_info = self._detect_time(q_lower)
         category = self._detect_category(q_lower)
 
-        if not time_info["clause"] and self._MONTH_RE.search(q_lower):
+        if not time_info["clause"] and self._MONTH_RE.search(q_lower) and not re.search(r'\b(?:between|from\s+\w+\s+to)\b', q_lower):
             if not category:
                 return None
 
         for method in [
             self._match_budget,
+            self._match_budgets_all,
             self._match_pacing,
+            self._match_week_comparison,
+            self._match_year_comparison,
             self._match_comparison,
+            self._match_specific_date_range,
+            self._match_combined_categories,
             self._match_most_expensive,
             self._match_top_n,
+            self._match_most_recent,
+            self._match_most_used_category,
+            self._match_count_by_category,
             self._match_category_breakdown,
+            self._match_daily_breakdown,
             self._match_average_daily,
             self._match_how_many,
             self._match_how_much_with_category,
+            self._match_description_spend,
             self._match_date_highest_spend,
+            self._match_amount_threshold,
             self._match_how_much_total,
+            self._match_year_to_date,
             self._match_show_expenses_by_category,
             self._match_show_expenses,
         ]:
@@ -316,3 +328,191 @@ class PatternEngine:
                 f"FROM budgets b WHERE b.user_id = :uid AND b.category = '__overall__'"
             )
         return (sql, "budget")
+
+    def _match_budgets_all(self, q, q_lower, time_info, category):
+        if not re.search(r'\b(?:all\s+budget|show\s+.*budget|budget\s+status|budgets)\b', q_lower):
+            return None
+        if category:
+            return None
+        d = self._d
+        sql = (
+            f"SELECT b.category, b.amount as budget_amount, "
+            f"COALESCE(e.spent, 0) as spent, "
+            f"b.amount - COALESCE(e.spent, 0) as remaining "
+            f"FROM budgets b "
+            f"LEFT JOIN (SELECT category, SUM(amount) as spent FROM expenses "
+            f"WHERE user_id = :uid AND date LIKE '{d['current_month']}%' GROUP BY category) e "
+            f"ON e.category = b.category "
+            f"WHERE b.user_id = :uid ORDER BY b.category"
+        )
+        return (sql, "budgets_all")
+
+    def _match_week_comparison(self, q, q_lower, time_info, category):
+        if not re.search(r'\b(?:this\s+week\s+vs|this\s+week\s+compare|week\s+over\s+week)\b', q_lower):
+            if not (re.search(r'\bcompare\b', q_lower) and re.search(r'\blasts?\s+week\b', q_lower)):
+                return None
+        d = self._d
+        sql = (
+            f"SELECT 'This week' as period, COALESCE(SUM(amount), 0) as total "
+            f"FROM expenses WHERE user_id = :uid "
+            f"AND date >= '{d['week_start']}' AND date <= '{d['today']}' "
+            f"UNION ALL "
+            f"SELECT 'Last week', COALESCE(SUM(amount), 0) "
+            f"FROM expenses WHERE user_id = :uid "
+            f"AND date >= '{d['last_week_start']}' AND date < '{d['week_start']}'"
+        )
+        return (sql, "week_comparison")
+
+    def _match_year_comparison(self, q, q_lower, time_info, category):
+        if not re.search(r'\b(?:this\s+year\s+vs|this\s+year\s+compare|year\s+over\s+year)\b', q_lower):
+            if not (re.search(r'\bcompare\b', q_lower) and re.search(r'\blast\s+year\b', q_lower)):
+                return None
+        d = self._d
+        last_year = str(int(d['current_year']) - 1)
+        sql = (
+            f"SELECT SUBSTR(date, 1, 4) as year, COALESCE(SUM(amount), 0) as total "
+            f"FROM expenses WHERE user_id = :uid "
+            f"AND (date LIKE '{d['current_year']}%' OR date LIKE '{last_year}%') "
+            f"GROUP BY SUBSTR(date, 1, 4) ORDER BY year"
+        )
+        return (sql, "year_comparison")
+
+    def _match_specific_date_range(self, q, q_lower, time_info, category):
+        m = re.search(r'\bbetween\s+(\w+\s+\d+)\s+and\s+(\w+\s+\d+)\b', q_lower)
+        if not m:
+            m = re.search(r'\bfrom\s+(\w+\s+\d+)\s+to\s+(\w+\s+\d+)\b', q_lower)
+        if not m:
+            return None
+        try:
+            start = datetime.strptime(m.group(1).title() + f" {self._d['current_year']}", "%B %d %Y")
+            end = datetime.strptime(m.group(2).title() + f" {self._d['current_year']}", "%B %d %Y")
+        except ValueError:
+            return None
+        if start > end:
+            start, end = end, start
+        start_str = start.strftime("%Y-%m-%d")
+        end_str = end.strftime("%Y-%m-%d")
+        where = self._where_clause(time_info, category)
+        if "user_id = :uid" in where:
+            where += f" AND date >= '{start_str}' AND date <= '{end_str}'"
+        else:
+            where = f"user_id = :uid AND date >= '{start_str}' AND date <= '{end_str}'"
+        if self._has_aggregate_intent(q_lower):
+            sql = f"SELECT COALESCE(SUM(amount), 0) as total, COUNT(*) as count FROM expenses WHERE {where}"
+        else:
+            sql = f"SELECT date, description, amount, category FROM expenses WHERE {where} ORDER BY date LIMIT 50"
+        return (sql, "date_range")
+
+    def _match_combined_categories(self, q, q_lower, time_info, category):
+        m = re.search(r'\bhow\s+much\s+on\s+(.+?)\s+(?:and|&)\s+(.+?)\s+(?:combined|this|last|total)?\s*(?:month|week|year)?\s*$', q_lower)
+        if not m:
+            return None
+        cat1 = m.group(1).strip().title()
+        cat2 = m.group(2).strip().title()
+        cats = []
+        for c in _ALL_CATEGORIES:
+            if c.lower() in cat1.lower() or cat1.lower() in c.lower():
+                cats.append(c)
+            elif c.lower() in cat2.lower() or cat2.lower() in c.lower():
+                cats.append(c)
+        if len(cats) < 2:
+            return None
+        cats_str = ", ".join(f"'{c}'" for c in cats)
+        where = self._where_clause(time_info)
+        if "user_id = :uid" in where:
+            where += f" AND category IN ({cats_str})"
+        else:
+            where = f"user_id = :uid AND category IN ({cats_str})"
+        sql = f"SELECT COALESCE(SUM(amount), 0) as total, COUNT(*) as count FROM expenses WHERE {where}"
+        return (sql, "combined_categories")
+
+    def _match_amount_threshold(self, q, q_lower, time_info, category):
+        m = re.search(r'\b(over|above|more\s+than|greater\s+than|exceeding)\s+(\d+)\b', q_lower)
+        direction = ">"
+        if not m:
+            m = re.search(r'\b(under|below|less\s+than|lower\s+than|at\s+most)\s+(\d+)\b', q_lower)
+            direction = "<"
+        if not m:
+            return None
+        amount = int(m.group(2))
+        where = self._where_clause(time_info, category)
+        if "user_id = :uid" in where:
+            where += f" AND amount {direction} {amount}"
+        else:
+            where = f"user_id = :uid AND amount {direction} {amount}"
+        if self._has_list_intent(q_lower) or not self._has_aggregate_intent(q_lower):
+            sql = f"SELECT date, description, amount, category FROM expenses WHERE {where} ORDER BY amount DESC LIMIT 50"
+        else:
+            sql = f"SELECT COALESCE(SUM(amount), 0) as total, COUNT(*) as count FROM expenses WHERE {where}"
+        return (sql, "amount_threshold")
+
+    def _match_daily_breakdown(self, q, q_lower, time_info, category):
+        if not re.search(r'\b(?:each\s+day|per\s+day|daily\s+breakdown|day\s+by\s+day|spend\s+each\s+day|day\'s\s+spending)\b', q_lower):
+            return None
+        if not time_info or not time_info["clause"]:
+            return None
+        where = "user_id = :uid AND " + time_info["clause"]
+        sql = f"SELECT date, COALESCE(SUM(amount), 0) as total FROM expenses WHERE {where} GROUP BY date ORDER BY date"
+        return (sql, "daily_breakdown")
+
+    def _match_most_used_category(self, q, q_lower, time_info, category):
+        if not re.search(r'\b(?:most\s+used|most\s+frequent|which\s+category.*most|use\s+the\s+most)\b', q_lower):
+            return None
+        if category:
+            return None
+        if not time_info or not time_info["clause"]:
+            return None
+        where = "user_id = :uid AND " + time_info["clause"]
+        sql = f"SELECT category, COUNT(*) as count FROM expenses WHERE {where} GROUP BY category ORDER BY count DESC LIMIT 1"
+        return (sql, "most_used_category")
+
+    def _match_year_to_date(self, q, q_lower, time_info, category):
+        if not re.search(r'\b(?:year\s+to\s+date|ytd|this\s+year\s+so\s+far|total.*this\s+year|spent.*this\s+year)\b', q_lower):
+            return None
+        d = self._d
+        where = self._where_clause(None, category)
+        if "user_id = :uid" in where:
+            where += f" AND date LIKE '{d['current_year']}%'"
+        else:
+            where = f"user_id = :uid AND date LIKE '{d['current_year']}%'"
+        sql = f"SELECT COALESCE(SUM(amount), 0) as total, COUNT(*) as count FROM expenses WHERE {where}"
+        return (sql, "year_to_date")
+
+    def _match_most_recent(self, q, q_lower, time_info, category):
+        if not re.search(r'\b(?:last\s+expense|most\s+recent\s+expense|latest\s+expense|last\s+transaction|most\s+recent\s+transaction)\b', q_lower):
+            return None
+        if self._has_aggregate_intent(q_lower):
+            return None
+        where = self._where_clause(time_info, category)
+        sql = f"SELECT date, description, amount, category FROM expenses WHERE {where} ORDER BY date DESC, id DESC LIMIT 1"
+        return (sql, "most_recent")
+
+    def _match_description_spend(self, q, q_lower, time_info, category):
+        if not self._has_aggregate_intent(q_lower):
+            return None
+        if category:
+            return None
+        keyword = self._detect_item_keyword(q_lower)
+        if not keyword or keyword in [c.lower() for c in _ALL_CATEGORIES]:
+            return None
+        where = self._where_clause(time_info)
+        if "user_id = :uid" in where:
+            where += f" AND LOWER(description) LIKE '%{keyword}%'"
+        else:
+            where = f"user_id = :uid AND LOWER(description) LIKE '%{keyword}%'"
+        sql = f"SELECT COALESCE(SUM(amount), 0) as total, COUNT(*) as count FROM expenses WHERE {where}"
+        return (sql, "description_spend")
+
+    def _match_count_by_category(self, q, q_lower, time_info, category):
+        if not re.search(r'\b(?:count.*category|frequency.*category|how\s+many.*per)\b', q_lower):
+            if not (re.search(r'\bcount\b', q_lower) and re.search(r'\bcategor', q_lower)):
+                return None
+        if not time_info or not time_info["clause"]:
+            return None
+        where = "user_id = :uid AND " + time_info["clause"]
+        if category:
+            where += f" AND category = '{category}'"
+            sql = f"SELECT COUNT(*) as count FROM expenses WHERE {where}"
+        else:
+            sql = f"SELECT category, COUNT(*) as count FROM expenses WHERE {where} GROUP BY category ORDER BY count DESC"
+        return (sql, "count_by_category")
