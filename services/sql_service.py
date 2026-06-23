@@ -435,20 +435,105 @@ class SqlService:
         )
 
     @staticmethod
+    def _classify_intent(question):
+        q = question.lower()
+        return {
+            "is_aggregate": bool(re.search(r'\b(?:how\s+much|total|sum|amount)\b', q)),
+            "is_list": bool(re.search(r'\b(?:show|list|display|find|see|view)\b', q)),
+            "is_breakdown": bool(re.search(r'\b(?:breakdown.*category|category.*breakdown|by\s+category|category\s+wise|which\s+category)\b', q)),
+            "is_frequency": bool(re.search(r'\b(?:how\s+many|count|frequency|how\s+often)\b', q)),
+            "is_most_expensive": bool(re.search(r'\b(?:most\s+expensive|biggest\s+expense|largest\s+expense)\b', q)),
+            "is_top_n": bool(re.search(r'\b(top|first|biggest|largest)\s+\d+\b', q)),
+            "is_ordinal": bool(re.search(r'\b(?:second|third|fourth|fifth|\d+(?:st|nd|rd|th))\b', q)),
+            "is_budget": bool(re.search(r'\bbudget\b', q)),
+            "has_sort_request": bool(re.search(r'\b(?:descending|desc|newest|reverse|sort|order)\b', q)),
+        }
+
+    @staticmethod
     def apply_all_fixes(sql, question):
+        intent = SqlService._classify_intent(question)
+        q = question.lower()
+
+        # Phase 1: WHERE/filter fixers (non-conflicting, different parts of WHERE)
         sql = SqlService.fix_category_in_sql(sql, question)
+        sql = SqlService.fix_description_filter(sql, question)
+        sql = SqlService.fix_date_filter(sql, question)
+        sql = SqlService.fix_history_id_filter(sql, question)
+
+        # Phase 2: SELECT-modifying fixers (mutually exclusive — only one should win)
+        if intent["is_budget"]:
+            sql = SqlService.fix_budget_query(sql, question)
+        elif intent["is_frequency"] and intent["is_breakdown"]:
+            sql = SqlService.fix_frequency_sql(sql, question)
+            if not re.search(r'\b(?:SUM|COUNT|GROUP\s+BY)\b', sql, re.IGNORECASE):
+                sql = SqlService.fix_category_breakdown_sql(sql, question)
+        elif intent["is_breakdown"]:
+            sql = SqlService.fix_category_breakdown_sql(sql, question)
+        elif intent["is_list"] and not intent["is_aggregate"]:
+            sql = SqlService.fix_show_expenses_aggregate(sql, question)
+        elif intent["is_aggregate"]:
+            sql = SqlService.fix_aggregate_sql(sql, question)
+
+        if intent["is_frequency"]:
+            sql = SqlService.fix_frequency_sql(sql, question)
+
+        # Phase 3: ORDER/LIMIT fixers (mutually exclusive per category)
+        if intent["is_most_expensive"]:
+            sql = SqlService.fix_most_expensive_sql(sql, question)
+        elif intent["is_ordinal"]:
+            sql = SqlService.fix_ordinal_limit(sql, question)
+        elif intent["is_top_n"]:
+            sql = SqlService.fix_top_n_limit(sql, question)
+
         sql = SqlService.fix_sort_order(sql, question)
         sql = SqlService.fix_sort_column(sql, question)
-        sql = SqlService.fix_frequency_sql(sql, question)
-        sql = SqlService.fix_top_n_limit(sql, question)
+
+        # Phase 4: Syntax fixups (always safe)
         sql = SqlService.fix_limit_syntax(sql, question)
-        sql = SqlService.fix_ordinal_limit(sql, question)
-        sql = SqlService.fix_category_breakdown_sql(sql, question)
-        sql = SqlService.fix_aggregate_sql(sql, question)
-        sql = SqlService.fix_most_expensive_sql(sql, question)
-        sql = SqlService.fix_history_id_filter(sql, question)
-        sql = SqlService.fix_date_filter(sql, question)
-        sql = SqlService.fix_show_expenses_aggregate(sql, question)
-        sql = SqlService.fix_description_filter(sql, question)
-        sql = SqlService.fix_budget_query(sql, question)
+
         return sql
+
+    @staticmethod
+    def validate_results(question, columns, rows):
+        q = question.lower()
+        issues = []
+
+        col_set = {c.lower() for c in columns}
+        has_amount = bool(col_set & {"total", "amount", "sum", "spent", "cost"})
+        has_date = bool(col_set & {"date", "day"})
+        has_category = bool(col_set & {"category"})
+        has_description = bool(col_set & {"description", "desc"})
+        has_count = "count" in col_set
+
+        # Check: user asked "how much" but no amount column
+        if re.search(r'\b(?:how\s+much|total|spent)\b', q) and not has_amount and not has_count:
+            issues.append("question asks about spending but result has no amount column")
+
+        # Check: user asked about a category but result has no category filter
+        mentioned_cat = None
+        for cat in _ALL_CATEGORIES:
+            if cat.lower() in q:
+                mentioned_cat = cat
+                break
+        if mentioned_cat and has_category:
+            for row in rows:
+                if row.get("category") and row["category"] != mentioned_cat:
+                    issues.append(f"result includes category '{row['category']}' but question is about '{mentioned_cat}'")
+                    break
+
+        # Check: user asked for list but only got an aggregate
+        list_intent = bool(re.search(r'\b(?:show|list|display|find|see)\b', q))
+        expense_keywords = bool(re.search(r'\b(?:expense|transaction|record|item)\b', q))
+        if list_intent and has_amount and not has_description and not has_category:
+            if has_amount and len(columns) <= 2:
+                issues.append("question asks to show/list but result is an aggregate (not individual rows)")
+
+        # Check: user asked for items but only count returned
+        if list_intent and has_count and not has_amount and not has_description:
+            issues.append("question asks to list transactions but only count returned")
+
+        # Check: empty results for time-specific questions
+        if not rows and re.search(r'\b(?:this\s+month|last\s+month|today|yesterday)\b', q):
+            issues.append("empty result for a time period that likely has data")
+
+        return issues
