@@ -144,5 +144,5 @@ def compose_answers(question, sub_results, history=None):
         )
         return response.choices[0].message.content.strip()
     except Exception:
-        answers = [r.get("answer", "") for r in sub_results if r.get("answer")]
+        answers = [_extract_text(r.get("answer", "")) for r in sub_results if r.get("answer")]
         return " ".join(answers) if answers else None

@@ -1,5 +1,7 @@
 import os
 from flask import Flask, render_template, request, session, jsonify
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
 from functools import wraps
 from datetime import datetime, timedelta, date
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -20,6 +22,17 @@ app.secret_key = SECRET_KEY
 app.config.update(
     SESSION_COOKIE_SAMESITE='Lax',
     SESSION_COOKIE_HTTPONLY=True,
+)
+
+def _rate_limit_key():
+    return str(session.get("user_id", get_remote_address()))
+
+limiter = Limiter(
+    app=app,
+    key_func=_rate_limit_key,
+    default_limits=["120 per minute"],
+    storage_uri="memory://",
+    enabled=os.environ.get("RATELIMIT_ENABLED", "1") != "0",
 )
 
 def _static_version():
@@ -84,6 +97,7 @@ def api_me():
 
 
 @app.route("/api/login", methods=["POST"])
+@limiter.limit("10 per minute", key_func=get_remote_address)
 def api_login():
     data = request.get_json()
     username = data.get("username", "").strip()
@@ -98,6 +112,7 @@ def api_login():
 
 
 @app.route("/api/register", methods=["POST"])
+@limiter.limit("5 per minute", key_func=get_remote_address)
 def api_register():
     data = request.get_json()
     username = data.get("username", "").strip()
@@ -134,6 +149,7 @@ def api_logout():
 
 
 @app.route("/api/forgot-password", methods=["POST"])
+@limiter.limit("3 per minute", key_func=get_remote_address)
 def api_forgot_password():
     data = request.get_json()
     username = data.get("username", "").strip()
@@ -153,6 +169,7 @@ def api_validate_reset_token(token):
 
 
 @app.route("/api/reset-password/<token>", methods=["POST"])
+@limiter.limit("5 per minute", key_func=get_remote_address)
 def api_reset_password(token):
     data = request.get_json()
     password = data.get("password", "").strip()
@@ -383,6 +400,7 @@ def api_learn():
 
 @app.route("/api/ask", methods=["POST"])
 @login_required
+@limiter.limit("15 per minute")
 def api_ask():
     data = request.get_json()
     question = data.get("question", "").strip()
@@ -504,6 +522,7 @@ def api_suggestions():
 
 @app.route("/api/chat", methods=["POST"])
 @login_required
+@limiter.limit("15 per minute")
 def api_chat():
     data = request.get_json()
     message = data.get("message", "").strip()
@@ -563,6 +582,7 @@ def api_chat():
 
 @app.route("/api/split_expense", methods=["POST"])
 @login_required
+@limiter.limit("20 per minute")
 def api_split_expense():
     data = request.get_json()
     description = data.get("description", "").strip()
@@ -1220,6 +1240,7 @@ def api_forecast():
 
 @app.route("/api/transcribe", methods=["POST"])
 @login_required
+@limiter.limit("5 per minute")
 def api_transcribe():
     if "audio" not in request.files:
         return jsonify({"error": "No audio file"}), 400
@@ -1239,6 +1260,7 @@ ALLOWED_RECEIPT_MIME = {"image/jpeg", "image/png", "image/webp", "image/heic", "
 
 @app.route("/api/scan_receipt", methods=["POST"])
 @login_required
+@limiter.limit("5 per minute")
 def api_scan_receipt():
     if "image" not in request.files:
         return jsonify({"error": "No image uploaded"}), 400

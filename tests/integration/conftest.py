@@ -1,4 +1,6 @@
 import os
+os.environ["RATELIMIT_ENABLED"] = "0"
+
 import pytest
 from unittest.mock import MagicMock, patch
 from config import DATABASE_URL as _orig_db_url, DATABASE_PATH as _orig_db_path
@@ -31,6 +33,7 @@ def reset_db():
 def app():
     _flask_app.config['TESTING'] = True
     _flask_app.config['SECRET_KEY'] = 'test-secret-key'
+    _flask_app.config['RATELIMIT_ENABLED'] = False
     return _flask_app
 
 
