@@ -161,6 +161,81 @@ class TestClassifyIntent:
         assert all(v is False for v in intent.values())
 
 
+# ── Ellipsis / Context Carry-Over ──
+
+class TestResolveEllipsis:
+    def test_what_about_carries_previous_subject(self):
+        from services.qa_service import resolve_ellipsis
+        history = [{"role": "user", "content": "How much on Food this month?"}]
+        result = resolve_ellipsis("what about last month?", history)
+        assert "food" in result.lower()
+        assert "last month" in result
+
+    def test_how_about_carries_previous_subject(self):
+        from services.qa_service import resolve_ellipsis
+        history = [{"role": "user", "content": "How much on Transport this week?"}]
+        result = resolve_ellipsis("how about this month?", history)
+        assert "transport" in result.lower()
+
+    def test_no_history_returns_original(self):
+        from services.qa_service import resolve_ellipsis
+        assert resolve_ellipsis("how much on food?", []) == "how much on food?"
+
+    def test_no_ellipsis_returns_original(self):
+        from services.qa_service import resolve_ellipsis
+        history = [{"role": "user", "content": "How much on Food?"}]
+        assert resolve_ellipsis("Show me everything", history) == "Show me everything"
+
+    def test_and_what_about(self):
+        from services.qa_service import resolve_ellipsis
+        history = [{"role": "user", "content": "How much on Groceries this month?"}]
+        result = resolve_ellipsis("and what about last week?", history)
+        assert "groceries" in result.lower()
+
+
+# ── SQL Injection Prevention ──
+
+class TestSqlInjectionPrevention:
+    def test_fix_description_filter_sanitizes_keyword(self):
+        sql = "SELECT * FROM expenses WHERE user_id = :uid"
+        result = SqlService.fix_description_filter(sql, "How much on uber OR 1=1?")
+        assert "1=1" not in result
+        assert "uber" in result.lower()
+        assert "LIKE" in result
+
+    def test_fix_description_filter_rejects_empty_keyword(self):
+        sql = "SELECT * FROM expenses WHERE user_id = :uid"
+        result = SqlService.fix_description_filter(sql, "Show me everything")
+        assert result == sql
+
+    def test_fix_description_filter_strips_non_alphanumeric(self):
+        sql = "SELECT * FROM expenses WHERE user_id = :uid"
+        result = SqlService.fix_description_filter(sql, "how much on uber'--")
+        assert "uber" in result.lower()
+        assert "1=1" not in result
+
+
+# ── Multi-Word Description Search ──
+
+class TestMultiWordDescription:
+    def test_multi_word_keyword_extraction(self):
+        result = SqlService._extract_item_keyword("how much on uber eats this month?")
+        assert result == "uber eats"
+
+    def test_single_word_keyword_extraction(self):
+        result = SqlService._extract_item_keyword("how much on pizza?")
+        assert result == "pizza"
+
+    def test_no_keyword_returns_none(self):
+        result = SqlService._extract_item_keyword("what is my total spending?")
+        assert result is None
+
+    def test_sql_injection_keyword_sanitized(self):
+        result = SqlService._extract_item_keyword("how much on food' or '1'='1?")
+        assert result is not None
+        assert "'" not in result
+
+
 # ── Pattern Engine: How Much with Category ──
 
 class TestPatternHowMuchCategory:
@@ -728,5 +803,84 @@ class TestValidateResults:
         assert len(issues) > 0
         assert "empty" in issues[0]
 
+
+# ── Pattern Engine: Amount Range (BETWEEN) ──
+
+class TestPatternAmountRange:
+    def test_between_range_list(self, engine):
+        result = engine.match("Show expenses between 100 and 500 this month")
+        assert result is not None
+        sql, pname = result
+        assert pname == "amount_range"
+        assert "BETWEEN 100 AND 500" in sql
+        assert "date, description, amount, category" in sql
+
+    def test_between_range_aggregate(self, engine):
+        result = engine.match("How much did I spend between 50 and 200 this month?")
+        assert result is not None
+        sql, pname = result
+        assert pname == "amount_range"
+        assert "BETWEEN" in sql
+        assert "SUM(amount)" in sql
+
+    def test_from_to_range(self, engine):
+        result = engine.match("Expenses from 1000 to 5000?")
+        assert result is not None
+        sql, pname = result
+        assert pname == "amount_range"
+        assert "BETWEEN 1000 AND 5000" in sql
+
+
+# ── Pattern Engine: Unused Categories ──
+
+class TestPatternUnusedCategories:
+    def test_unused_categories_this_month(self, engine):
+        result = engine.match("Which categories did I not spend on this month?")
+        assert result is not None
+        sql, pname = result
+        assert pname == "unused_categories"
+
+    def test_no_spending_in_category(self, engine):
+        result = engine.match("What categories have no expenses this month?")
+        assert result is not None
+        assert result[1] == "unused_categories"
+
+    def test_without_time_no_match(self, engine):
+        result = engine.match("What categories have no expenses?")
+        assert result is None
+
+
+# ── Pattern Engine: Category Comparison ──
+
+class TestPatternCategoryComparison:
+    def test_how_much_more_than(self, engine):
+        result = engine.match("How much more on Food than Transport this month?")
+        assert result is not None
+        sql, pname = result
+        assert pname == "category_comparison"
+        assert "Food" in sql
+        assert "Transport" in sql
+
+    def test_more_on_than(self, engine):
+        result = engine.match("Did I spend more on Groceries than Dining Out this month?")
+        assert result is not None
+        sql, pname = result
+        assert pname == "category_comparison"
+
+
+# ── Format Answer: Category Comparison ──
+
+class TestFormatAnswerCategoryComparison:
+    def test_category_comparison_format(self):
+        from llm.qa import format_answer
+        data = [
+            {"category": "Food", "total": 5000.0},
+            {"category": "Transport", "total": 2000.0},
+        ]
+        result = format_answer(["category", "total"], data, "How much more on Food than Transport?")
+        assert "comparison" in result["type"]
+        assert "৳5000" in result["text"]
+        assert "৳2000" in result["text"]
+        assert "৳3000" in result["text"]
 
 

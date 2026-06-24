@@ -44,6 +44,57 @@ def _log_trace(question, trace):
     print(f"[TRACE] {trace.get('source', 'cache')} | {' | '.join(stages)} | q={question[:60]}", file=sys.stderr)
 
 
+_TIME_PERIODS = [
+    (r'\bthis\s+month\b', 'this month'), (r'\blast\s+month\b', 'last month'),
+    (r'\bthis\s+week\b', 'this week'), (r'\blast\s+week\b', 'last week'),
+    (r'\bthis\s+year\b', 'this year'), (r'\blast\s+year\b', 'last year'),
+    (r'\btoday\b', 'today'), (r'\byesterday\b', 'yesterday'),
+]
+
+
+def _extract_time_period(text):
+    for pattern, label in _TIME_PERIODS:
+        if re.search(pattern, text):
+            return label
+    return None
+
+
+def resolve_ellipsis(question, history):
+    q = question.strip().lower()
+    if not history:
+        return question
+    last_q = None
+    for h in reversed(history):
+        if h.get("role") == "user":
+            last_q = h["content"]
+            break
+    if not last_q:
+        return question
+
+    is_ellipsis = any(re.search(p, q) for p in [
+        r'\bwhat\s+about\b', r'\bhow\s+about\b',
+        r'\band\s+(?:what|how)\s+about\b',
+    ])
+    if not is_ellipsis:
+        m = re.search(r'\b(?:what|how)\s+(?:was|is)\s+(last|previous)\s+(month|week|year)\b', q)
+        if m:
+            period = m.group(2)
+            return f"How does this {period} compare to last {period}?"
+        return question
+
+    current_time = _extract_time_period(q)
+    last_subject = re.sub(r'^how\s+much\s+on\s+', '', last_q.lower()).strip()
+    last_subject = re.sub(r'\?+$', '', last_subject).strip()
+    last_subject = re.sub(r'\b(?:this|last)\s+(?:month|week|year|today|yesterday)\b', '', last_subject).strip()
+    last_subject = re.sub(r'\s+', ' ', last_subject).strip()
+    if not last_subject:
+        return question
+    result = f"How much on {last_subject}"
+    if current_time:
+        result += f" {current_time}"
+    return result + "?"
+
+
 class QaService:
 
     @staticmethod
@@ -150,7 +201,8 @@ class QaService:
             return {"error": "Generated query is not a valid SELECT statement", "sql": sql, "trace": trace}
 
         sql = SqlService.ensure_user_filter(sql)
-        sql = SqlService.apply_all_fixes(sql, question)
+        if not from_pattern:
+            sql = SqlService.apply_all_fixes(sql, question)
         trace["sql_fixes"] = round((_time.time() - t) * 1000, 1)
 
         t = _time.time()
@@ -222,6 +274,7 @@ class QaService:
 
     @staticmethod
     def answer_question(question, history, uid):
+        question = resolve_ellipsis(question, history)
         question = QaService.normalize_question(question)
         schema = QaService.get_schema_cached()
         current_date = datetime.now(TIMEZONE).strftime("%B %d, %Y")

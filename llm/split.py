@@ -1,6 +1,6 @@
 import json
 import re
-from llm.config import _get_client, _has_api_key
+from llm.config import _get_client, _has_api_key, FAST_MODEL
 from llm.categories import CATEGORIES, CATEGORIES_STR
 from llm.expenses import check_learned
 
@@ -51,7 +51,7 @@ def split_expenses(description, learned_categories=None):
     try:
         client = _get_client()
         response = client.chat.completions.create(
-            model="llama-3.1-8b-instant",
+            model=FAST_MODEL,
             messages=[
                 {"role": "system", "content": "You are an expense splitter. Return only a JSON array."},
                 {"role": "user", "content": f"{SPLIT_PROMPT}\n\nInput: {description}\nOutput:"},

@@ -1,6 +1,6 @@
 import json
 from datetime import date as _d
-from llm.config import _get_client, _has_api_key
+from llm.config import _get_client, _has_api_key, COMPLEX_MODEL
 from llm.qa import _fmt_history
 
 _QUESTION_WORDS = {"what", "how", "why", "show", "tell", "list", "give", "which", "when", "where", "who", "did", "do", "does", "is", "are", "was", "were", "can", "could", "would", "will"}
@@ -89,7 +89,7 @@ def decompose_question(question, schema, history=None):
     try:
         client = _get_client()
         response = client.chat.completions.create(
-            model="llama-3.1-8b-instant",
+            model=COMPLEX_MODEL,
             messages=[
                 {"role": "system", "content": "You are a query decomposition assistant. Return only valid JSON."},
                 {"role": "user", "content": prompt},
@@ -134,7 +134,7 @@ def compose_answers(question, sub_results, history=None):
     try:
         client = _get_client()
         response = client.chat.completions.create(
-            model="llama-3.1-8b-instant",
+            model=COMPLEX_MODEL,
             messages=[
                 {"role": "system", "content": "You are a friendly Bangladeshi personal finance assistant."},
                 {"role": "user", "content": prompt},

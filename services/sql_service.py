@@ -347,26 +347,23 @@ class SqlService:
 
     @staticmethod
     def _extract_item_keyword(q):
-        m = re.search(r'\b(?:bought|buy|purchase|purchased|get|got)\s+(?:a\s+|an\s+|the\s+|some\s+)?(\w+)', q)
-        if m:
-            word = m.group(1).strip()
-            if word not in _SKIP_WORDS and not re.match(r'\d+(?:st|nd|rd|th)$', word):
-                return word
-        m = re.search(r'\b(?:spent|spend)\s+on\s+(?:a\s+|an\s+|the\s+)?(\w+(?:\s+\w+)?)', q)
-        if m:
-            word = m.group(1).strip().split()[0]
-            if word not in _SKIP_WORDS and not re.match(r'\d+(?:st|nd|rd|th)$', word):
-                return word
-        m = re.search(r'\bhow\s+much\s+(?:on|for)\s+(?:a\s+|an\s+|the\s+)?(\w+)', q)
-        if m:
-            word = m.group(1).strip()
-            if word not in _SKIP_WORDS and not re.match(r'\d+(?:st|nd|rd|th)$', word):
-                return word
-        m = re.search(r'\b(\w+)\s+expenses?\b', q)
-        if m:
-            word = m.group(1).strip()
-            if word not in _SKIP_WORDS and not re.match(r'\d+(?:st|nd|rd|th)$', word):
-                return word
+        for pattern in [
+            r'\b(?:bought|buy|purchase|purchased|get|got)\s+(?:a\s+|an\s+|the\s+|some\s+)?(\w+(?:\s+\w+)?)',
+            r'\b(?:spent|spend)\s+on\s+(?:a\s+|an\s+|the\s+)?(\w+(?:\s+\w+)?)',
+            r'\bhow\s+much\s+(?:on|for)\s+(?:a\s+|an\s+|the\s+)?(\w+(?:\s+\w+)?)',
+            r'(\w+(?:\s+\w+)?)\s+expenses',
+        ]:
+            m = re.search(pattern, q)
+            if m:
+                phrase = m.group(1).strip().lower()
+                parts = phrase.split()
+                if parts and parts[0] not in _SKIP_WORDS and not re.match(r'\d+(?:st|nd|rd|th)$', parts[0]):
+                    valid = [parts[0]]
+                    for p in parts[1:]:
+                        if p in _SKIP_WORDS or re.match(r'\d+(?:st|nd|rd|th)$', p):
+                            break
+                        valid.append(p)
+                    return ' '.join(valid)
         return None
 
     @staticmethod
@@ -379,7 +376,14 @@ class SqlService:
         keyword = SqlService._extract_item_keyword(q)
         if not keyword or len(keyword) < 2 or keyword in [c.lower() for c in _ALL_CATEGORIES] or keyword.endswith('est'):
             return sql
-        return add_condition(sql, f"LOWER(description) LIKE '%{keyword}%'")
+        words = keyword.lower().split()
+        clauses = []
+        for w in words:
+            safe = re.sub(r'[^\w\s]', '', w).replace('%', '').replace('_', '')[:50]
+            clauses.append(f"LOWER(description) LIKE '%{safe}%'")
+        if not clauses:
+            return sql
+        return add_condition(sql, " AND ".join(clauses))
 
     @staticmethod
     def fix_aggregate_sql(sql, question):

@@ -1,6 +1,6 @@
 import json
 from datetime import date as _d
-from llm.config import _get_client, _has_api_key
+from llm.config import _get_client, _has_api_key, COMPLEX_MODEL
 
 FORECAST_PROMPT = """You are a personal finance forecasting assistant. Given the user's daily spending data, predict their end-of-month total.
 
@@ -125,7 +125,7 @@ def generate_forecast(data):
     try:
         client = _get_client()
         response = client.chat.completions.create(
-            model="llama-3.1-8b-instant",
+            model=COMPLEX_MODEL,
             messages=[
                 {"role": "system", "content": "You are a financial forecasting assistant. Return ONLY valid JSON."},
                 {"role": "user", "content": prompt},

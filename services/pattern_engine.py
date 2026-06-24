@@ -70,6 +70,7 @@ class PatternEngine:
             self._match_budget,
             self._match_budgets_all,
             self._match_pacing,
+            self._match_forecast,
             self._match_week_comparison,
             self._match_year_comparison,
             self._match_comparison,
@@ -88,10 +89,13 @@ class PatternEngine:
             self._match_description_spend,
             self._match_date_highest_spend,
             self._match_amount_threshold,
+            self._match_amount_range,
             self._match_how_much_total,
             self._match_year_to_date,
             self._match_show_expenses_by_category,
             self._match_show_expenses,
+            self._match_unused_categories,
+            self._match_category_comparison,
         ]:
             result = method(q, q_lower, time_info, category)
             if result:
@@ -132,17 +136,36 @@ class PatternEngine:
 
     def _detect_item_keyword(self, q_lower):
         for pattern in [
-            r'\b(?:bought|buy|purchase|purchased|get|got)\s+(?:a\s+|an\s+|the\s+|some\s+)?(\w+)',
+            r'\b(?:bought|buy|purchase|purchased|get|got)\s+(?:a\s+|an\s+|the\s+|some\s+)?(\w+(?:\s+\w+)?)',
             r'\b(?:spent|spend)\s+on\s+(?:a\s+|an\s+|the\s+)?(\w+(?:\s+\w+)?)',
-            r'\bhow\s+much\s+(?:on|for)\s+(?:a\s+|an\s+|the\s+)?(\w+)',
+            r'\bhow\s+much\s+(?:on|for)\s+(?:a\s+|an\s+|the\s+)?(\w+(?:\s+\w+)?)',
+            r'(\w+(?:\s+\w+)?)\s+expenses',
         ]:
             m = re.search(pattern, q_lower)
             if m:
-                word = m.group(1).strip()
-                parts = word.split()
+                phrase = m.group(1).strip().lower()
+                parts = phrase.split()
                 if parts and parts[0] not in _SKIP_WORDS and parts[0] not in self._CAT_SET:
-                    return parts[0]
+                    valid = [parts[0]]
+                    for p in parts[1:]:
+                        if p in _SKIP_WORDS or p in self._CAT_SET:
+                            break
+                        valid.append(p)
+                    return ' '.join(valid)
         return None
+
+    def _description_where_clause(self, keyword, where_prefix):
+        words = keyword.lower().split()
+        clauses = []
+        for w in words:
+            safe = re.sub(r'[^\w\s]', '', w).replace('%', '').replace('_', '')[:50]
+            clauses.append(f"LOWER(description) LIKE '%{safe}%'")
+        if not clauses:
+            return where_prefix
+        joined = " AND ".join(clauses)
+        if where_prefix:
+            return where_prefix + " AND " + joined
+        return joined
 
     def _where_clause(self, time_info, category=None):
         parts = []
@@ -165,7 +188,7 @@ class PatternEngine:
             return None
         if not category:
             return None
-        if re.search(r'\b(?:compare|breakdown|vs|versus|budget|track|pacing)\b', q_lower):
+        if re.search(r'\b(?:compare|breakdown|vs|versus|budget|track|pacing|than)\b', q_lower):
             return None
         if re.search(r'\b(?:nothing|no\s+spending|zero|no\s+expense|without)\b', q_lower):
             return None
@@ -305,6 +328,20 @@ class PatternEngine:
         )
         return (sql, "pacing")
 
+    def _match_forecast(self, q, q_lower, time_info, category):
+        if not re.search(r'\b(?:projected?|forecast|will\s+i\s+spend|by\s+the\s+end\s+of\s+(?:the\s+)?month|end\s+of\s+month|gonna\s+spend|expect\s+to\s+spend)\b', q_lower):
+            return None
+        d = self._d
+        days_elapsed = max(d['days_elapsed'], 1)
+        sql = (
+            f"SELECT COALESCE(SUM(amount), 0) as total, "
+            f"ROUND(CAST(COALESCE(SUM(amount), 0) / {days_elapsed} AS numeric), 0) as daily_avg, "
+            f"{days_elapsed} as days_elapsed, {d['days_in_month']} as days_in_month, "
+            f"(SELECT COALESCE(amount, 0) FROM budgets WHERE user_id = :uid AND category = '__overall__') as budget_amount "
+            f"FROM expenses WHERE user_id = :uid AND date LIKE '{d['current_month']}%'"
+        )
+        return (sql, "forecast")
+
     def _match_budget(self, q, q_lower, time_info, category):
         if not re.search(r'\bbudget\b', q_lower):
             return None
@@ -382,14 +419,18 @@ class PatternEngine:
         if not m:
             m = re.search(r'\bfrom\s+(\w+\s+\d+)\s+to\s+(\w+\s+\d+)\b', q_lower)
         if not m:
+            m = re.search(r'\bfrom\s+(\w+\s+\d+)\s+(?:through|until|till)\s+(\w+\s+\d+)\b', q_lower)
+        if not m:
             return None
+        this_year = self._d['current_year']
+        last_year = str(int(this_year) - 1)
         try:
-            start = datetime.strptime(m.group(1).title() + f" {self._d['current_year']}", "%B %d %Y")
-            end = datetime.strptime(m.group(2).title() + f" {self._d['current_year']}", "%B %d %Y")
+            start = datetime.strptime(m.group(1).title() + f" {this_year}", "%B %d %Y")
+            end = datetime.strptime(m.group(2).title() + f" {this_year}", "%B %d %Y")
         except ValueError:
             return None
-        if start > end:
-            start, end = end, start
+        if end < start:
+            start = datetime.strptime(m.group(1).title() + f" {last_year}", "%B %d %Y")
         start_str = start.strftime("%Y-%m-%d")
         end_str = end.strftime("%Y-%m-%d")
         where = self._where_clause(time_info, category)
@@ -404,11 +445,13 @@ class PatternEngine:
         return (sql, "date_range")
 
     def _match_combined_categories(self, q, q_lower, time_info, category):
-        m = re.search(r'\bhow\s+much\s+on\s+(.+?)\s+(?:and|&)\s+(.+?)\s+(?:combined|this|last|total)?\s*(?:month|week|year)?\s*$', q_lower)
+        m = re.search(r'\bhow\s+much\s+on\s+(.+?)\s+(?:and|&)\s+(.+?)\s+(?:combined|totals?|spending|expenses?|this|last|total)?\s*(?:month|week|year)?\s*$', q_lower.strip().rstrip('?.!,'))
         if not m:
             return None
-        cat1 = m.group(1).strip().title()
-        cat2 = m.group(2).strip().title()
+        raw1 = m.group(1).strip()
+        raw2 = m.group(2).strip()
+        cat1 = raw1[0].upper() + raw1[1:] if raw1 else raw1
+        cat2 = raw2[0].upper() + raw2[1:] if raw2 else raw2
         cats = []
         for c in _ALL_CATEGORIES:
             if c.lower() in cat1.lower() or cat1.lower() in c.lower():
@@ -496,10 +539,7 @@ class PatternEngine:
         if not keyword or keyword in [c.lower() for c in _ALL_CATEGORIES]:
             return None
         where = self._where_clause(time_info)
-        if "user_id = :uid" in where:
-            where += f" AND LOWER(description) LIKE '%{keyword}%'"
-        else:
-            where = f"user_id = :uid AND LOWER(description) LIKE '%{keyword}%'"
+        where = self._description_where_clause(keyword, where)
         sql = f"SELECT COALESCE(SUM(amount), 0) as total, COUNT(*) as count FROM expenses WHERE {where}"
         return (sql, "description_spend")
 
@@ -516,3 +556,65 @@ class PatternEngine:
         else:
             sql = f"SELECT category, COUNT(*) as count FROM expenses WHERE {where} GROUP BY category ORDER BY count DESC"
         return (sql, "count_by_category")
+
+    def _match_amount_range(self, q, q_lower, time_info, category):
+        m = re.search(r'\b(?:between|from)\s+(\d+)\s+(?:and|to)\s+(\d+)\b', q_lower)
+        if not m:
+            return None
+        lo, hi = int(m.group(1)), int(m.group(2))
+        if lo > hi:
+            lo, hi = hi, lo
+        where = self._where_clause(time_info, category)
+        if "user_id = :uid" in where:
+            where += f" AND amount BETWEEN {lo} AND {hi}"
+        else:
+            where = f"user_id = :uid AND amount BETWEEN {lo} AND {hi}"
+        if self._has_list_intent(q_lower) or not self._has_aggregate_intent(q_lower):
+            sql = f"SELECT date, description, amount, category FROM expenses WHERE {where} ORDER BY amount DESC LIMIT 50"
+        else:
+            sql = f"SELECT COALESCE(SUM(amount), 0) as total, COUNT(*) as count FROM expenses WHERE {where}"
+        return (sql, "amount_range")
+
+    def _match_unused_categories(self, q, q_lower, time_info, category):
+        if not re.search(r'\b(?:not\s+(?:spend|used|spent)|never\s+(?:used|spent)|didn\'?t\s+(?:spend|use)|haven\'?t\s+(?:spent|used)|no\s+(?:spending|expenses?)|without|excluding|unused|did\s+not\s+(?:spend|use))\b', q_lower):
+            return None
+        if not time_info or not time_info["clause"]:
+            return None
+        tc = time_info["clause"]
+        cat_union = " UNION ALL ".join(f"SELECT '{c}' as cat_name" for c in _ALL_CATEGORIES)
+        sql = (
+            f"WITH all_cats AS ({cat_union}), "
+            f"used AS (SELECT DISTINCT category FROM expenses "
+            f"WHERE user_id = :uid AND {tc}) "
+            f"SELECT cat_name as category FROM all_cats "
+            f"WHERE cat_name NOT IN (SELECT category FROM used)"
+        )
+        return (sql, "unused_categories")
+
+    def _match_category_comparison(self, q, q_lower, time_info, category):
+        m = re.search(r'\bhow\s+much\s+more\s+(?:on|for)\s+(.+?)\s+(?:than|vs\.?|versus)\s+(.+?)\s*(?:\?|$)', q_lower)
+        if not m:
+            m = re.search(r'\b(?:more|less)\s+on\s+(.+?)\s+(?:than|vs\.?|versus)\s+(.+?)\s*(?:\?|$)', q_lower)
+        if not m:
+            return None
+        raw1 = m.group(1).strip()
+        raw2 = m.group(2).strip()
+        def _match_cat(raw):
+            rl = raw.lower()
+            for c in sorted(_ALL_CATEGORIES, key=len, reverse=True):
+                if c.lower() in rl:
+                    return c
+            return None
+        cat1 = _match_cat(raw1)
+        cat2 = _match_cat(raw2)
+        if not cat1 or not cat2:
+            return None
+        where = self._where_clause(time_info, None)
+        sql = (
+            f"SELECT '{cat1}' as category, COALESCE(SUM(CASE WHEN category = '{cat1}' THEN amount END), 0) as total "
+            f"FROM expenses WHERE {where} "
+            f"UNION ALL "
+            f"SELECT '{cat2}', COALESCE(SUM(CASE WHEN category = '{cat2}' THEN amount END), 0) "
+            f"FROM expenses WHERE {where}"
+        )
+        return (sql, "category_comparison")

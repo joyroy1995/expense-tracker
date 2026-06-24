@@ -3,7 +3,7 @@ import re
 import calendar
 from datetime import date, timedelta
 from config import SEED_CATEGORIES
-from llm.config import _get_client, _has_api_key
+from llm.config import _get_client, _has_api_key, FAST_MODEL
 from llm.categories import CATEGORIES, CATEGORIES_STR, keyword_category, extract_amount_fallback, bengali_to_english_num, _EXCLUDE_KEYWORDS
 
 SYSTEM_PROMPT = f"""You are an expense extraction assistant for a Bangladeshi user. The user will describe their expense in English, Bengali, or Banglish (Bengali written in English letters).
@@ -107,7 +107,7 @@ def extract_expense(description, learned_categories=None):
     try:
         client = _get_client()
         response = client.chat.completions.create(
-            model="llama-3.1-8b-instant",
+            model=FAST_MODEL,
             messages=[
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": description},

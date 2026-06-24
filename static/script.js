@@ -584,6 +584,7 @@ async function renderHome(page = 1) {
             <button id="voiceBtn" class="chat-input-btn" title="Voice input">🎤</button>
             <button id="chatSendBtn" class="chat-input-btn" title="Send" style="display:none"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg></button>
           </div>
+          <div id="voicePreview" class="chat-voice-preview" style="display:none"></div>
         </div>
       </div>
     </div>
@@ -1714,6 +1715,10 @@ function initChatCard() {
       input.style.height = Math.min(input.scrollHeight, 300) + 'px';
       toggleInputButtons();
     });
+    input.addEventListener('focus', () => {
+      const container = document.getElementById('chatMessages');
+      if (container) container.scrollTop = container.scrollHeight;
+    });
     toggleInputButtons();
   }
 
@@ -1868,7 +1873,7 @@ function startNativeVoice(input, voiceBtn) {
   recognition.interimResults = true;
   recognition.lang = 'en-US';
 
-  recognition.onresult = (event) => {
+    recognition.onresult = (event) => {
     let interim = '';
     let final = '';
     for (let i = event.resultIndex; i < event.results.length; i++) {
@@ -1881,6 +1886,10 @@ function startNativeVoice(input, voiceBtn) {
     }
     voiceFinalTranscript += final;
     input.value = voiceFinalTranscript + interim;
+    const preview = document.getElementById('voicePreview');
+    if (preview) {
+      preview.textContent = voiceFinalTranscript || interim || '...';
+    }
 
     clearTimeout(voiceSilenceTimer);
     voiceSilenceTimer = setTimeout(() => {
@@ -1911,6 +1920,8 @@ function startNativeVoice(input, voiceBtn) {
     voiceBtn.title = 'Stop recording';
     input.placeholder = 'Listening...';
     input.focus();
+    const preview = document.getElementById('voicePreview');
+    if (preview) { preview.style.display = 'block'; preview.textContent = 'Listening...'; }
   } catch (e) {
     showToast('Failed to start voice input', 'error');
   }
@@ -2010,6 +2021,8 @@ function stopVoiceInput() {
   if (input) {
     input.placeholder = 'Ask a question...';
   }
+  const preview = document.getElementById('voicePreview');
+  if (preview) { preview.style.display = 'none'; preview.textContent = ''; }
   voiceFinalTranscript = '';
   voiceChunks = [];
 }
@@ -2034,12 +2047,17 @@ function renderRichAnswer(answer) {
     h += `<div class="rich-progress"><div class="rich-progress-fill ${cls}" style="width:${pct}%"></div></div>`;
     h += `<div class="rich-budget-stats"><div class="rich-budget-stat"><div class="value">৳${Number(answer.spent).toFixed(2)}</div><div class="label">Spent</div></div><div class="rich-budget-stat"><div class="value">৳${Number(answer.budget).toFixed(2)}</div><div class="label">Budget</div></div><div class="rich-budget-stat"><div class="value">${pct}%</div><div class="label">Used</div></div></div>`;
   } else if (t === 'pacing') {
+    const de = answer.days_elapsed || 1;
+    const dim = answer.days_in_month || 30;
+    const dayPct = Math.min((de / dim) * 100, 100);
     h += `<div class="rich-pacing-grid">`;
     h += `<div class="rich-pacing-item"><span class="value">৳${Number(answer.total).toLocaleString('en-IN', {maximumFractionDigits:0})}</span><div class="label">Spent</div></div>`;
     h += `<div class="rich-pacing-item"><span class="value">৳${Number(answer.daily_avg).toLocaleString('en-IN', {maximumFractionDigits:0})}</span><div class="label">Avg / day</div></div>`;
     h += `<div class="rich-pacing-item"><span class="value">৳${Number(answer.projected).toLocaleString('en-IN', {maximumFractionDigits:0})}</span><div class="label">Projected</div></div>`;
-    h += `<div class="rich-pacing-item"><span class="value">${answer.days_elapsed}/${answer.days_in_month}</span><div class="label">Days</div></div>`;
+    h += `<div class="rich-pacing-item"><span class="value">${de}/${dim}</span><div class="label">Days</div></div>`;
     h += `</div>`;
+    h += `<div class="rich-pacing-track"><div class="rich-pacing-fill" style="width:${dayPct}%"></div></div>`;
+    h += `<div class="rich-pacing-sub">${de} of ${dim} days elapsed (${Math.round(dayPct)}%)</div>`;
   } else if (t === 'comparison') {
     const months = answer.months || [];
     const maxAmt = Math.max(...months.map(m => m.amount), 1);
@@ -2049,6 +2067,14 @@ function renderRichAnswer(answer) {
       h += `<div class="rich-compare-bar"><span class="rich-compare-label">${esc(m.label)}</span><div class="rich-compare-track"><div class="rich-compare-fill" style="width:${Math.max(pct, 4)}%">${pct > 25 ? '৳' + Number(m.amount).toLocaleString('en-IN', {maximumFractionDigits:0}) : ''}</div></div><span class="rich-compare-amount">৳${Number(m.amount).toLocaleString('en-IN', {maximumFractionDigits:0})}</span></div>`;
     });
     h += `</div>`;
+    const mBars = months.map(m => ({label: m.label, value: m.amount, color: '#6366f1'}));
+    h += _miniSvgChart(mBars, 180, 80);
+    if (months.length === 2) {
+      const diff = months[0].amount - months[1].amount;
+      const dir = diff > 0 ? '&#x2191;' : diff < 0 ? '&#x2193;' : '&#x2194;';
+      const cls = diff > 0 ? 'up' : diff < 0 ? 'down' : 'same';
+      h += `<div class="rich-compare-diff ${cls}">${dir} ৳${Math.abs(diff).toLocaleString('en-IN', {maximumFractionDigits:0})} ${diff > 0 ? 'increase' : diff < 0 ? 'decrease' : 'no change'}</div>`;
+    }
   } else if (t === 'category_breakdown') {
     const cats = answer.categories || [];
     const maxAmt = Math.max(...cats.map(c => c.amount), 1);
@@ -2059,6 +2085,27 @@ function renderRichAnswer(answer) {
       h += `<div class="rich-cat-row"><span class="rich-cat-name">${esc(c.name)}</span><div class="rich-cat-bar" style="width:${Math.max(pct, 4)}%;background:${col}"></div><span class="rich-cat-amt">৳${Number(c.amount).toFixed(2)}</span><span class="rich-cat-pct">${c.pct}%</span></div>`;
     });
     h += `</div>`;
+    const catBars = cats.map(c => ({label: c.name, value: c.amount, color: _richCatColor(c.name)}));
+    h += _miniSvgChart(catBars, 180, 80);
+  } else if (t === 'forecast') {
+    const pct = Math.min((answer.total / answer.projected) * 100, 100);
+    const pctBudget = answer.budget ? Math.min((answer.projected / answer.budget) * 100, 100) : 0;
+    const exceedCls = answer.will_exceed ? 'danger' : 'safe';
+    h += `<div class="rich-forecast">`;
+    h += `<div class="rich-total-hero"><div class="amount">৳${Number(answer.projected).toLocaleString('en-IN', {maximumFractionDigits:0})}</div><div class="sub">projected end-of-month</div></div>`;
+    h += `<div class="rich-compare" style="margin-top:8px">`;
+    h += `<div class="rich-compare-bar"><span class="rich-compare-label">Spent so far</span><div class="rich-compare-track"><div class="rich-compare-fill" style="width:${Math.max(pct, 4)}%">${pct > 20 ? '৳' + Number(answer.total).toLocaleString('en-IN', {maximumFractionDigits:0}) : ''}</div></div><span class="rich-compare-amount">৳${Number(answer.total).toLocaleString('en-IN', {maximumFractionDigits:0})}</span></div>`;
+    if (answer.budget) {
+      h += `<div class="rich-compare-bar"><span class="rich-compare-label">Budget</span><div class="rich-compare-track"><div class="rich-compare-fill ${exceedCls}" style="width:${Math.max(pctBudget, 4)}%">${pctBudget > 20 ? '৳' + Number(answer.budget).toLocaleString('en-IN', {maximumFractionDigits:0}) : ''}</div></div><span class="rich-compare-amount">৳${Number(answer.budget).toLocaleString('en-IN', {maximumFractionDigits:0})}</span></div>`;
+    }
+    h += `<div class="rich-compare-bar"><span class="rich-compare-label">Days</span><div class="rich-compare-track"><div class="rich-compare-fill" style="width:${Math.min((answer.days_elapsed / answer.days_in_month) * 100, 100)}%;background:#a78bfa"></div></div><span class="rich-compare-amount">${answer.days_elapsed}/${answer.days_in_month}</span></div>`;
+    h += `</div></div>`;
+    const fBars = [
+      {label: 'Spent', value: answer.total, color: '#6366f1'},
+      {label: 'Projected', value: answer.projected, color: '#f59e0b'},
+    ];
+    if (answer.budget) fBars.push({label: 'Budget', value: answer.budget, color: '#22c55e'});
+    h += _miniSvgChart(fBars, 180, 70);
   } else if (t === 'total') {
     h += `<div class="rich-total-hero"><div class="amount">৳${Number(answer.total).toLocaleString('en-IN', {maximumFractionDigits:0})}</div>`;
     if (answer.count) h += `<div class="sub">across ${answer.count} transaction(s)</div>`;
@@ -2097,6 +2144,25 @@ function renderRichAnswer(answer) {
 
   h += '</div>';
   return h;
+}
+
+function _miniSvgChart(bars, w, h) {
+  if (!bars || !bars.length) return '';
+  const max = Math.max(...bars.map(b => b.value), 1);
+  const pad = 2, gap = 4, totalW = Math.max(bars.length * 40, w);
+  const bw = Math.max((totalW - pad * 2 - gap * (bars.length - 1)) / bars.length, 8);
+  const ch = h - 24;
+  let svg = `<svg width="${totalW}" height="${h}" viewBox="0 0 ${totalW} ${h}" style="display:block;margin:6px auto 0;overflow:visible"><g transform="translate(${pad},0)">`;
+  bars.forEach((b, i) => {
+    const bh = Math.max((b.value / max) * ch, 2);
+    const x = i * (bw + gap);
+    const y = ch - bh;
+    const col = b.color || '#6366f1';
+    svg += `<rect x="${x}" y="${y}" width="${bw}" height="${bh}" rx="2" fill="${col}" opacity="0.85"><title>${esc(b.label)}: ৳${Number(b.value).toLocaleString('en-IN', {maximumFractionDigits:0})}</title></rect>`;
+    svg += `<text x="${x + bw / 2}" y="${ch + 14}" text-anchor="middle" font-size="10" fill="var(--text-secondary)">${esc(b.label)}</text>`;
+  });
+  svg += '</g></svg>';
+  return svg;
 }
 
 function highlightInline(text) {
@@ -2312,7 +2378,105 @@ function renderChatMessages() {
     ta.style.height = 'auto';
     ta.style.height = Math.min(ta.scrollHeight, 120) + 'px';
   });
-  container.scrollTop = container.scrollHeight;
+  if (container.scrollHeight - container.scrollTop - container.clientHeight < 120) {
+    container.scrollTop = container.scrollHeight;
+  }
+}
+
+function _isAmountCol(name) {
+  const n = name.toLowerCase();
+  return n === 'total' || n === 'spent' || n === 'remaining' || n === 'budget_amount' ||
+    n.includes('amount') || n.includes('spent') || n.includes('total') ||
+    n === 'avg' || n === 'average' || n === 'avg_daily' || n === 'daily_avg' ||
+    n === 'sum' || n === 'cost' || n === 'budget';
+}
+
+function _renderCell(col, val) {
+  if (typeof val === 'number') {
+    if (_isAmountCol(col)) return `<span class="td-amount">৳${val.toFixed(2)}</span>`;
+    if (col.toLowerCase() === 'count' || col === 'cnt') return `<span class="td-count">${val}</span>`;
+    return val;
+  }
+  const cl = col.toLowerCase();
+  if (cl === 'category' && val) {
+    const colors = window.categoryColors || {};
+    const c = colors[val] || '#6b7280';
+    return `<span class="category-badge" style="background:${c}20;color:${c};border-color:${c}40">${esc(val)}</span>`;
+  }
+  if (val == null) return '';
+  return esc(String(val));
+}
+
+function _renderTable(columns, data, shownRows) {
+  const catIdx = columns.findIndex(c => c.toLowerCase() === 'category');
+  const rows = data.slice(0, shownRows);
+  let h = '<table><thead><tr>';
+  columns.forEach((c, ci) => {
+    h += `<th onclick="_sortTable(this)" data-col="${ci}" class="td-sortable">${esc(c)} <span class="td-sort-arrow"></span></th>`;
+  });
+  h += '</tr></thead><tbody>';
+  rows.forEach(r => {
+    h += '<tr>';
+    columns.forEach(c => {
+      h += `<td>${_renderCell(c, r[c])}</td>`;
+    });
+    h += '</tr>';
+  });
+  h += '</tbody></table>';
+  return h;
+}
+
+let _sortStates = {};
+
+function _sortTable(th) {
+  const el = th.closest('[id^="td-"]');
+  if (!el) return;
+  const idx = parseInt(el.id.replace('td-', ''), 10);
+  const store = window._tableStore[idx];
+  if (!store) return;
+  const ci = parseInt(th.dataset.col, 10);
+  const col = store.columns[ci];
+  if (!col) return;
+
+  const key = idx + '-' + ci;
+  const prev = _sortStates[key] || 0;
+  const dir = prev >= 1 ? -1 : 1;
+  _sortStates[key] = dir;
+
+  store.columns.forEach((_, i) => {
+    const h = el.querySelectorAll('th')[i];
+    if (h) {
+      const arrow = h.querySelector('.td-sort-arrow');
+      if (arrow) arrow.textContent = i === ci ? (dir === 1 ? ' ▲' : ' ▼') : '';
+    }
+  });
+
+  const allCols = store.columns;
+  const catIdx = allCols.findIndex(c => c.toLowerCase() === 'category');
+  store.data.sort((a, b) => {
+    let va = a[col], vb = b[col];
+    if (typeof va === 'number' && typeof vb === 'number') return (va - vb) * dir;
+    va = String(va != null ? va : '').toLowerCase();
+    vb = String(vb != null ? vb : '').toLowerCase();
+    if (col.toLowerCase() === 'date') {
+      const da = va ? new Date(va) : null;
+      const db = vb ? new Date(vb) : null;
+      if (da && db) return (da - db) * dir;
+    }
+    return va < vb ? -dir : va > vb ? dir : 0;
+  });
+  store.shown = 10;
+  el.innerHTML = _renderTable(store.columns, store.data, store.shown) + _tableFooter(store, idx);
+}
+
+function _tableFooter(store, idx) {
+  let h = '';
+  if (store.shown < store.data.length) {
+    h += `<button class="chat-show-more" onclick="showMoreTable(${idx})">Show more (${store.data.length - store.shown} remaining)</button>`;
+  } else if (store.data.length > 10) {
+    h += `<div class="chat-table-more">Showing all ${store.data.length} entries</div>`;
+  }
+  return h;
 }
 
 function renderDataTable(columns, data) {
@@ -2323,29 +2487,9 @@ function renderDataTable(columns, data) {
 
   if (!window._tableStore) window._tableStore = [];
   const storeId = 'td-' + window._tableStore.length;
-  window._tableStore.push({ columns: visibleCols, data, shown: maxRows });
+  window._tableStore.push({ columns: visibleCols, data: [...data], shown: maxRows });
 
-  const rows = data.slice(0, maxRows);
-  let h = `<div class="chat-data-table" id="${storeId}"><table><thead><tr>`;
-  visibleCols.forEach(c => { h += `<th>${esc(c)}</th>`; });
-  h += '</tr></thead><tbody>';
-  rows.forEach(r => {
-    h += '<tr>';
-    visibleCols.forEach(c => {
-      let v = r[c];
-      if (typeof v === 'number') {
-        v = c.toLowerCase().includes('amount') || c === 'total' ? `৳${v.toFixed(2)}` : v;
-      }
-      h += `<td>${v != null ? esc(String(v)) : ''}</td>`;
-    });
-    h += '</tr>';
-  });
-  h += '</tbody></table>';
-  if (data.length > maxRows) {
-    h += `<button class="chat-show-more" onclick="showMoreTable(${window._tableStore.length - 1})">Show more (${data.length - maxRows} remaining)</button>`;
-  }
-  h += '</div>';
-  return h;
+  return `<div class="chat-data-table" id="${storeId}">${_renderTable(visibleCols, data, maxRows)}${_tableFooter(null, window._tableStore.length - 1)}</div>`;
 }
 
 function showMoreTable(idx) {
@@ -2354,28 +2498,7 @@ function showMoreTable(idx) {
   const el = document.getElementById('td-' + idx);
   if (!el) return;
   store.shown = Math.min(store.shown + 10, store.data.length);
-  const rows = store.data.slice(0, store.shown);
-  let h = '<table><thead><tr>';
-  store.columns.forEach(c => { h += `<th>${esc(c)}</th>`; });
-  h += '</tr></thead><tbody>';
-  rows.forEach(r => {
-    h += '<tr>';
-    store.columns.forEach(c => {
-      let v = r[c];
-      if (typeof v === 'number') {
-        v = c.toLowerCase().includes('amount') || c === 'total' ? `৳${v.toFixed(2)}` : v;
-      }
-      h += `<td>${v != null ? esc(String(v)) : ''}</td>`;
-    });
-    h += '</tr>';
-  });
-  h += '</tbody></table>';
-  if (store.shown < store.data.length) {
-    h += `<button class="chat-show-more" onclick="showMoreTable(${idx})">Show more (${store.data.length - store.shown} remaining)</button>`;
-  } else if (store.data.length > 10) {
-    h += `<div class="chat-table-more">Showing all ${store.data.length} entries</div>`;
-  }
-  el.innerHTML = h;
+  el.innerHTML = _renderTable(store.columns, store.data, store.shown) + _tableFooter(store, idx);
 }
 
 async function sendChatMessage() {

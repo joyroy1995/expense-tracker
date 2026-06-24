@@ -1,7 +1,8 @@
 import json
+import re
 import calendar
 from datetime import date as _d, timedelta
-from llm.config import _get_client, _has_api_key
+from llm.config import _get_client, _has_api_key, COMPLEX_MODEL
 
 
 def _fmt_history(history, max_entries=6):
@@ -28,7 +29,124 @@ def _fmt_dates():
     return today.isoformat(), ym, prev, today.strftime("%Y"), seven_days_ago, week_start, last_week_start, days_elapsed, days_in_month, last_year
 
 
-SQL_PROMPT = """You are a SQL query generator for a personal expense tracker. Given a user's natural language question and the current date, generate a SQL query to answer it.
+_EXAMPLE_BUCKETS = {
+    "aggregate": [
+        ("How much on Transport this month?", "SELECT COALESCE(SUM(amount), 0) as total, COUNT(*) as count FROM expenses WHERE user_id = :uid AND category = 'Transport' AND date LIKE '{current_month}%'"),
+        ("How much did I spend in the last 7 days?", "SELECT COALESCE(SUM(amount), 0) as total FROM expenses WHERE user_id = :uid AND date >= '{seven_days_ago}'"),
+        ("What did I spend on 2025-06-15?", "SELECT COALESCE(SUM(amount), 0) as total, COUNT(*) as count FROM expenses WHERE user_id = :uid AND date = '2025-06-15'"),
+        ("What's my total spending this year so far?", "SELECT COALESCE(SUM(amount), 0) as total, COUNT(*) as count FROM expenses WHERE user_id = :uid AND date LIKE '{current_year}%'"),
+    ],
+    "list": [
+        ("Show all my Dining Out expenses from last month", "SELECT date, description, amount FROM expenses WHERE user_id = :uid AND category = 'Dining Out' AND date LIKE '{last_month}%' ORDER BY date"),
+        ("List last 7 days expenses descending by date", "SELECT date, description, amount, category FROM expenses WHERE user_id = :uid AND date >= '{seven_days_ago}' ORDER BY date DESC LIMIT 50"),
+        ("Show all expenses from this week", "SELECT date, description, amount, category FROM expenses WHERE user_id = :uid AND date >= '{week_start}' AND date <= '{today}' ORDER BY date"),
+    ],
+    "breakdown": [
+        ("What categories did I spend on this month?", "SELECT category, COALESCE(SUM(amount), 0) as total, COUNT(*) as count FROM expenses WHERE user_id = :uid AND date LIKE '{current_month}%' GROUP BY category ORDER BY total DESC"),
+        ("How much did I spend each day this month?", "SELECT date, COALESCE(SUM(amount), 0) as total FROM expenses WHERE user_id = :uid AND date LIKE '{current_month}%' GROUP BY date ORDER BY date"),
+        ("How much did I spend each month this year?", "SELECT SUBSTR(date, 1, 7) as month, COALESCE(SUM(amount), 0) as total FROM expenses WHERE user_id = :uid AND date LIKE '{current_year}%' GROUP BY SUBSTR(date, 1, 7) ORDER BY month"),
+        ("Which day did I spend the most this month?", "SELECT date, COALESCE(SUM(amount), 0) as total FROM expenses WHERE user_id = :uid AND date LIKE '{current_month}%' GROUP BY date ORDER BY total DESC LIMIT 1"),
+    ],
+    "comparison": [
+        ("How does this month compare to last month?", "SELECT SUBSTR(date, 1, 7) as month, COALESCE(SUM(amount), 0) as total FROM expenses WHERE user_id = :uid AND (date LIKE '{current_month}%' OR date LIKE '{last_month}%') GROUP BY SUBSTR(date, 1, 7) ORDER BY month"),
+        ("How does this week compare to last week?", "SELECT 'This week' as period, COALESCE(SUM(amount), 0) as total FROM expenses WHERE user_id = :uid AND date >= '{week_start}' AND date <= '{today}' UNION ALL SELECT 'Last week', COALESCE(SUM(amount), 0) FROM expenses WHERE user_id = :uid AND date >= '{last_week_start}' AND date < '{week_start}'"),
+        ("How does this year compare to last year?", "SELECT SUBSTR(date, 1, 4) as year, COALESCE(SUM(amount), 0) as total FROM expenses WHERE user_id = :uid AND (date LIKE '{current_year}%' OR date LIKE '{last_year}%') GROUP BY SUBSTR(date, 1, 4) ORDER BY year"),
+    ],
+    "extreme": [
+        ("What was my most expensive expense this month?", "SELECT date, description, amount, category FROM expenses WHERE user_id = :uid AND date LIKE '{current_month}%' ORDER BY amount DESC LIMIT 1"),
+        ("What was my smallest expense this month?", "SELECT date, description, amount, category FROM expenses WHERE user_id = :uid AND date LIKE '{current_month}%' ORDER BY amount ASC LIMIT 1"),
+        ("What was my second most expensive expense this month?", "SELECT date, description, amount, category FROM expenses WHERE user_id = :uid AND date LIKE '{current_month}%' ORDER BY amount DESC LIMIT 1 OFFSET 1"),
+    ],
+    "frequency": [
+        ("How many times did I eat out this month?", "SELECT COUNT(*) as count FROM expenses WHERE user_id = :uid AND category = 'Dining Out' AND date LIKE '{current_month}%'"),
+        ("Which category did I use the most this month by frequency?", "SELECT category, COUNT(*) as count FROM expenses WHERE user_id = :uid AND date LIKE '{current_month}%' GROUP BY category ORDER BY count DESC LIMIT 1"),
+    ],
+    "budget": [
+        ("How much budget is left for Groceries this month?", "SELECT b.category, b.amount as budget_amount, COALESCE(SUM(e.amount), 0) as spent, b.amount - COALESCE(SUM(e.amount), 0) as remaining FROM budgets b LEFT JOIN expenses e ON e.user_id = b.user_id AND e.category = b.category AND e.date LIKE '{current_month}%' WHERE b.user_id = :uid AND b.category = 'Groceries' GROUP BY b.id, b.category, b.amount"),
+        ("Do I have budget left for Overall?", "SELECT b.category, b.amount as budget_amount, (SELECT COALESCE(SUM(amount), 0) FROM expenses WHERE user_id = :uid AND date LIKE '{current_month}%') as spent, b.amount - (SELECT COALESCE(SUM(amount), 0) FROM expenses WHERE user_id = :uid AND date LIKE '{current_month}%') as remaining FROM budgets b WHERE b.user_id = :uid AND b.category = '__overall__'"),
+        ("Show me all my budgets and how much I have spent", "SELECT b.category, b.amount as budget_amount, COALESCE(e.spent, 0) as spent, b.amount - COALESCE(e.spent, 0) as remaining FROM budgets b LEFT JOIN (SELECT category, SUM(amount) as spent FROM expenses WHERE user_id = :uid AND date LIKE '{current_month}%' GROUP BY category) e ON e.category = b.category WHERE b.user_id = :uid ORDER BY b.category"),
+    ],
+    "threshold": [
+        ("Show expenses over 500 this month", "SELECT date, description, amount, category FROM expenses WHERE user_id = :uid AND amount > 500 AND date LIKE '{current_month}%' ORDER BY amount DESC"),
+        ("Which categories did I spend more than 1000 on this month?", "SELECT category, COALESCE(SUM(amount), 0) as total FROM expenses WHERE user_id = :uid AND date LIKE '{current_month}%' GROUP BY category HAVING total > 1000 ORDER BY total DESC"),
+    ],
+    "description_search": [
+        ("Show me all expenses where I used Uber or Pathao", "SELECT date, description, amount, category FROM expenses WHERE user_id = :uid AND (description LIKE '%uber%' OR description LIKE '%pathao%') ORDER BY date DESC LIMIT 50"),
+        ("How much did I spend on Uber this month?", "SELECT COALESCE(SUM(amount), 0) as total, COUNT(*) as count FROM expenses WHERE user_id = :uid AND LOWER(description) LIKE '%uber%' AND date LIKE '{current_month}%'"),
+        ("How much on groceries at Swapno this month?", "SELECT COALESCE(SUM(amount), 0) as total, COUNT(*) as count FROM expenses WHERE user_id = :uid AND LOWER(description) LIKE '%swapno%' AND category = 'Groceries' AND date LIKE '{current_month}%'"),
+    ],
+    "date_range": [
+        ("How much did I spend between 2025-06-01 and 2025-06-15?", "SELECT COALESCE(SUM(amount), 0) as total, COUNT(*) as count FROM expenses WHERE user_id = :uid AND date >= '2025-06-01' AND date <= '2025-06-15'"),
+    ],
+    "general": [
+        ("Average daily spending this month", "SELECT COALESCE(AVG(daily.total), 0) as avg_daily FROM (SELECT SUM(amount) as total FROM expenses WHERE user_id = :uid AND date LIKE '{current_month}%' GROUP BY date) daily"),
+        ("Am I on track with my spending this month?", "SELECT COALESCE(SUM(amount), 0) as total, ROUND(CAST(COALESCE(SUM(amount), 0) / {days_elapsed} AS numeric), 0) as daily_avg, {days_elapsed} as days_elapsed, {days_in_month} as days_in_month FROM expenses WHERE user_id = :uid AND date LIKE '{current_month}%'"),
+        ("Show top 5 expenses this month", "SELECT date, description, amount, category FROM expenses WHERE user_id = :uid AND date LIKE '{current_month}%' ORDER BY amount DESC LIMIT 5"),
+        ("What are the top 5 categories I spend the most on this year?", "SELECT category, COALESCE(SUM(amount), 0) as total FROM expenses WHERE user_id = :uid AND date LIKE '{current_year}%' GROUP BY category ORDER BY total DESC LIMIT 5"),
+        ("How much on Food and Transport combined this month?", "SELECT COALESCE(SUM(amount), 0) as total, COUNT(*) as count FROM expenses WHERE user_id = :uid AND (category = 'Food' OR category = 'Transport') AND date LIKE '{current_month}%'"),
+        ("How much in January 2025?", "SELECT COALESCE(SUM(amount), 0) as total, COUNT(*) as count FROM expenses WHERE user_id = :uid AND date LIKE '2025-01%'"),
+    ],
+}
+
+
+def _classify_question(question):
+    q = question.lower()
+    buckets = []
+    if re.search(r'\bbudget\b', q):
+        buckets.append("budget")
+    if re.search(r'\b(?:how\s+much|total|sum|spent)\b', q) and not re.search(r'\b(?:budget|compare|vs|versus)\b', q):
+        buckets.append("aggregate")
+    if re.search(r'\b(?:show|list|display|find)\b', q) and re.search(r'\b(?:expense|transaction|record)\b', q):
+        buckets.append("list")
+    if re.search(r'\b(?:breakdown|category\s+wise|per\s+category|each\s+day|per\s+day|by\s+category)\b', q):
+        buckets.append("breakdown")
+    if re.search(r'\b(?:compare|vs|versus)\b', q):
+        buckets.append("comparison")
+    if re.search(r'\b(?:most\s+expensive|biggest\s+expense|smallest|cheapest|largest\s+expense)\b', q):
+        buckets.append("extreme")
+    if re.search(r'\b(?:how\s+many|frequency|how\s+often|count)\b', q):
+        buckets.append("frequency")
+    if re.search(r'\b(?:over|above|more\s+than|under|below|less\s+than|exceeding)\s+\d+\b', q):
+        buckets.append("threshold")
+    if re.search(r'\b(?:uber|pathao|swapno|description|item|product|bought|purchase)\b', q):
+        buckets.append("description_search")
+    if re.search(r'\bbetween\b', q):
+        buckets.append("date_range")
+    if not buckets:
+        buckets.append("general")
+    return buckets
+
+
+def _select_examples(question_buckets, fmt):
+    seen_questions = set()
+    selected = []
+    for bucket in question_buckets:
+        for q, sql in _EXAMPLE_BUCKETS.get(bucket, []):
+            if q not in seen_questions:
+                seen_questions.add(q)
+                selected.append((q, sql))
+                if len(selected) >= 4:
+                    break
+        if len(selected) >= 4:
+            break
+    if len(selected) < 2 and "general" not in question_buckets:
+        for q, sql in _EXAMPLE_BUCKETS.get("general", []):
+            if q not in seen_questions:
+                seen_questions.add(q)
+                selected.append((q, sql))
+                if len(selected) >= 3:
+                    break
+    if fmt == "prompt":
+        lines = []
+        for q, sql in selected:
+            lines.append(f"Q: {q}")
+            lines.append(f"SQL: {sql}")
+            lines.append("")
+        return "\n".join(lines).strip()
+    return selected
+
+
+SQL_PROMPT_TEMPLATE = """You are a SQL query generator for a personal expense tracker. Given a user's natural language question and the current date, generate a SQL query to answer it.
 
 Current date: {today}
 This month: {current_month}
@@ -41,135 +159,35 @@ Rules:
 1. Return ONLY the SQL query — no explanation, no markdown formatting, no backticks.
 2. Use ONLY SELECT queries.
 3. Always include "user_id = :uid" in the WHERE clause.
-4. Use only conditions from the current question. The conversation history is provided for context about the user's previous questions only — do NOT carry over WHERE conditions (such as id != N, category filters, date filters, or any other clause) from history into the current query unless the current question explicitly repeats or implies them.
-5. For date filtering:
-   - Use LIKE with pattern: date LIKE '{current_month}%'
-   - Use SUBSTR(date, 1, 4) for year extraction
-   - Use SUBSTR(date, 1, 7) for year-month extraction
-   - For date ranges use date >= 'YYYY-MM-DD' AND date <= 'YYYY-MM-DD'
-   - Pre-computed relative dates — use as literal strings: today={today}, 7_days_ago={seven_days_ago}, week_start={week_start}, last_week_start={last_week_start}
-    - Pre-computed date helpers for pacing: days_elapsed={days_elapsed}, days_in_month={days_in_month}
+4. Use only conditions from the current question. Do NOT carry over conditions from conversation history unless the current question explicitly repeats them.
+5. For date filtering use LIKE for month patterns, SUBSTR for year/month extraction, and direct comparisons for exact dates.
 6. Column names: id, date, description, amount, category, user_id, created_at
-7. Use COALESCE for safe SUM/AVG aggregates.
-8. Limit results to 50 rows max unless the user asks for a specific number.
-9. Use single quotes for strings.
-10. For the budgets table: amounts are monthly budgets, one row per category. Compare actual spending vs budget using LEFT JOIN and GROUP BY. Exception: for '__overall__' budget (total spending across ALL categories), use a scalar subquery instead of a JOIN on category.
-11. For description search, use LIKE with %% wildcards: description LIKE '%%keyword%%'
-12. When comparing periods, use SUBSTR(date, 1, 7) in GROUP BY or WHERE.
-13. For frequency/count questions ("how many times", "most used category", "in terms of frequency", "how often"), use COUNT(*) instead of SUM(amount). If the user asks which category by frequency, use COUNT(*) as count and ORDER BY count DESC.
-14. Use portable SQL with string-based date comparisons — avoid database-specific functions like `date()` or `strftime()`.
+7. Use COALESCE for safe SUM/AVG aggregates. Limit results to 50 max.
+8. For budgets: compare spending vs budget using LEFT JOIN and GROUP BY. For '__overall__', use a scalar subquery.
+9. For description search: use LOWER(description) LIKE '%%keyword%%'
+10. For frequency questions: use COUNT(*) instead of SUM(amount).
+11. Pre-computed dates: today={today}, 7_days_ago={seven_days_ago}, week_start={week_start}, last_week_start={last_week_start}, days_elapsed={days_elapsed}, days_in_month={days_in_month}
 
 Examples:
-
-Q: How much on Transport this month?
-SQL: SELECT COALESCE(SUM(amount), 0) as total, COUNT(*) as count FROM expenses WHERE user_id = :uid AND category = 'Transport' AND date LIKE '{current_month}%'
-
-Q: Show all my Dining Out expenses from last month
-SQL: SELECT date, description, amount FROM expenses WHERE user_id = :uid AND category = 'Dining Out' AND date LIKE '{last_month}%' ORDER BY date
-
-Q: What categories did I spend on this month?
-SQL: SELECT category, COALESCE(SUM(amount), 0) as total, COUNT(*) as count FROM expenses WHERE user_id = :uid AND date LIKE '{current_month}%' GROUP BY category ORDER BY total DESC
-
-Q: How much did I spend between 2025-06-01 and 2025-06-15?
-SQL: SELECT COALESCE(SUM(amount), 0) as total, COUNT(*) as count FROM expenses WHERE user_id = :uid AND date >= '2025-06-01' AND date <= '2025-06-15'
-
-Q: How much did I spend in the last 7 days?
-SQL: SELECT COALESCE(SUM(amount), 0) as total FROM expenses WHERE user_id = :uid AND date >= '{seven_days_ago}'
-
-Q: List last 7 days expenses descending by date
-SQL: SELECT date, description, amount, category FROM expenses WHERE user_id = :uid AND date >= '{seven_days_ago}' ORDER BY date DESC LIMIT 50
-
-Q: What did I spend on 2025-06-15?
-SQL: SELECT COALESCE(SUM(amount), 0) as total, COUNT(*) as count FROM expenses WHERE user_id = :uid AND date = '2025-06-15'
-
-Q: How much did I spend each day this month?
-SQL: SELECT date, COALESCE(SUM(amount), 0) as total FROM expenses WHERE user_id = :uid AND date LIKE '{current_month}%' GROUP BY date ORDER BY date
-
-Q: How much did I spend each month this year?
-SQL: SELECT SUBSTR(date, 1, 7) as month, COALESCE(SUM(amount), 0) as total FROM expenses WHERE user_id = :uid AND date LIKE '{current_year}%' GROUP BY SUBSTR(date, 1, 7) ORDER BY month
-
-Q: What was my most expensive expense this month?
-SQL: SELECT date, description, amount, category FROM expenses WHERE user_id = :uid AND date LIKE '{current_month}%' ORDER BY amount DESC LIMIT 1
-
-Q: What was my smallest expense this month?
-SQL: SELECT date, description, amount, category FROM expenses WHERE user_id = :uid AND date LIKE '{current_month}%' ORDER BY amount ASC LIMIT 1
-
-Q: Average daily spending this month
-SQL: SELECT COALESCE(AVG(daily.total), 0) as avg_daily FROM (SELECT SUM(amount) as total FROM expenses WHERE user_id = :uid AND date LIKE '{current_month}%' GROUP BY date) daily
-
-Q: Am I on track with my spending this month?
-SQL: SELECT COALESCE(SUM(amount), 0) as total, ROUND(CAST(COALESCE(SUM(amount), 0) / {days_elapsed} AS numeric), 0) as daily_avg, {days_elapsed} as days_elapsed, {days_in_month} as days_in_month FROM expenses WHERE user_id = :uid AND date LIKE '{current_month}%'
-
-Q: How many times did I eat out this month?
-SQL: SELECT COUNT(*) as count FROM expenses WHERE user_id = :uid AND category = 'Dining Out' AND date LIKE '{current_month}%'
-
-Q: Which category did I use the most this month by frequency?
-SQL: SELECT category, COUNT(*) as count FROM expenses WHERE user_id = :uid AND date LIKE '{current_month}%' GROUP BY category ORDER BY count DESC LIMIT 1
-
-Q: How does this month compare to last month?
-SQL: SELECT SUBSTR(date, 1, 7) as month, COALESCE(SUM(amount), 0) as total FROM expenses WHERE user_id = :uid AND (date LIKE '{current_month}%' OR date LIKE '{last_month}%') GROUP BY SUBSTR(date, 1, 7) ORDER BY month
-
-Q: How does this week compare to last week?
-SQL: SELECT 'This week' as period, COALESCE(SUM(amount), 0) as total FROM expenses WHERE user_id = :uid AND date >= '{week_start}' AND date <= '{today}' UNION ALL SELECT 'Last week', COALESCE(SUM(amount), 0) FROM expenses WHERE user_id = :uid AND date >= '{last_week_start}' AND date < '{week_start}'
-
-Q: How does this year compare to last year?
-SQL: SELECT SUBSTR(date, 1, 4) as year, COALESCE(SUM(amount), 0) as total FROM expenses WHERE user_id = :uid AND (date LIKE '{current_year}%' OR date LIKE '{last_year}%') GROUP BY SUBSTR(date, 1, 4) ORDER BY year
-
-Q: How much on Food and Transport combined this month?
-SQL: SELECT COALESCE(SUM(amount), 0) as total, COUNT(*) as count FROM expenses WHERE user_id = :uid AND (category = 'Food' OR category = 'Transport') AND date LIKE '{current_month}%'
-
-Q: Show expenses over 500 this month
-SQL: SELECT date, description, amount, category FROM expenses WHERE user_id = :uid AND amount > 500 AND date LIKE '{current_month}%' ORDER BY amount DESC
-
-Q: Which categories did I spend more than 1000 on this month?
-SQL: SELECT category, COALESCE(SUM(amount), 0) as total FROM expenses WHERE user_id = :uid AND date LIKE '{current_month}%' GROUP BY category HAVING total > 1000 ORDER BY total DESC
-
-Q: Show me all expenses where I used Uber or Pathao
-SQL: SELECT date, description, amount, category FROM expenses WHERE user_id = :uid AND (description LIKE '%uber%' OR description LIKE '%pathao%') ORDER BY date DESC LIMIT 50
-
-Q: How much did I spend on Uber this month?
-SQL: SELECT COALESCE(SUM(amount), 0) as total, COUNT(*) as count FROM expenses WHERE user_id = :uid AND LOWER(description) LIKE '%uber%' AND date LIKE '{current_month}%'
-
-Q: How much on groceries at Swapno this month?
-SQL: SELECT COALESCE(SUM(amount), 0) as total, COUNT(*) as count FROM expenses WHERE user_id = :uid AND LOWER(description) LIKE '%swapno%' AND category = 'Groceries' AND date LIKE '{current_month}%'
-
-Q: How much budget is left for Groceries this month?
-SQL: SELECT b.category, b.amount as budget_amount, COALESCE(SUM(e.amount), 0) as spent, b.amount - COALESCE(SUM(e.amount), 0) as remaining FROM budgets b LEFT JOIN expenses e ON e.user_id = b.user_id AND e.category = b.category AND e.date LIKE '{current_month}%' WHERE b.user_id = :uid AND b.category = 'Groceries' GROUP BY b.id, b.category, b.amount
-
-Q: Do I have budget left for Overall?
-SQL: SELECT b.category, b.amount as budget_amount, (SELECT COALESCE(SUM(amount), 0) FROM expenses WHERE user_id = :uid AND date LIKE '{current_month}%') as spent, b.amount - (SELECT COALESCE(SUM(amount), 0) FROM expenses WHERE user_id = :uid AND date LIKE '{current_month}%') as remaining FROM budgets b WHERE b.user_id = :uid AND b.category = '__overall__'
-
-Q: Show me all my budgets and how much I have spent
-SQL: SELECT b.category, b.amount as budget_amount, COALESCE(e.spent, 0) as spent, b.amount - COALESCE(e.spent, 0) as remaining FROM budgets b LEFT JOIN (SELECT category, SUM(amount) as spent FROM expenses WHERE user_id = :uid AND date LIKE '{current_month}%' GROUP BY category) e ON e.category = b.category WHERE b.user_id = :uid ORDER BY b.category
-
-Q: What are the top 5 categories I spend the most on this year?
-SQL: SELECT category, COALESCE(SUM(amount), 0) as total FROM expenses WHERE user_id = :uid AND date LIKE '{current_year}%' GROUP BY category ORDER BY total DESC LIMIT 5
-
-Q: Show top 5 expenses this month
-SQL: SELECT date, description, amount, category FROM expenses WHERE user_id = :uid AND date LIKE '{current_month}%' ORDER BY amount DESC LIMIT 5
-
-Q: Show all expenses from this week
-SQL: SELECT date, description, amount, category FROM expenses WHERE user_id = :uid AND date >= '{week_start}' AND date <= '{today}' ORDER BY date
-
-Q: What was my largest expense last month?
-SQL: SELECT date, description, amount, category FROM expenses WHERE user_id = :uid AND date LIKE '{last_month}%' ORDER BY amount DESC LIMIT 1
-
-Q: What was my second most expensive expense this month?
-SQL: SELECT date, description, amount, category FROM expenses WHERE user_id = :uid AND date LIKE '{current_month}%' ORDER BY amount DESC LIMIT 1 OFFSET 1
-
-Q: Which day did I spend the most this month?
-SQL: SELECT date, COALESCE(SUM(amount), 0) as total FROM expenses WHERE user_id = :uid AND date LIKE '{current_month}%' GROUP BY date ORDER BY total DESC LIMIT 1
-
-Q: What's my total spending this year so far?
-SQL: SELECT COALESCE(SUM(amount), 0) as total, COUNT(*) as count FROM expenses WHERE user_id = :uid AND date LIKE '{current_year}%'
-
-Q: How much in January 2025?
-SQL: SELECT COALESCE(SUM(amount), 0) as total, COUNT(*) as count FROM expenses WHERE user_id = :uid AND date LIKE '2025-01%'
+{examples}
 
 {history}
 Q: {question}
 SQL:"""
 
+
+VERIFY_SQL_PROMPT = """You are a SQL query verifier. Given a user's question and a generated SQL query, determine if the SQL correctly answers the question.
+
+Question: {question}
+Generated SQL: {sql}
+
+Check:
+1. Does the SQL WHERE clause filter by the categories, dates, or amounts mentioned in the question?
+2. Does the SQL SELECT the right columns (aggregate for totals, individual rows for lists)?
+3. Does the SQL include user_id = :uid for data isolation?
+
+Return ONLY a JSON object: {{"correct": true}} or {{"correct": false, "reason": "..."}}
+"""
 
 ANSWER_PROMPT = """You are a friendly Bangladeshi personal finance assistant. Today is {today}.
 
@@ -210,25 +228,58 @@ Rules:
 Corrected SQL:"""
 
 
+def _verify_sql(sql, question):
+    if not _has_api_key():
+        return True
+    q = question.replace("{", "").replace("}", "")
+    s = sql.replace("{", "").replace("}", "")
+    prompt = VERIFY_SQL_PROMPT.format(question=q, sql=s)
+    try:
+        client = _get_client()
+        response = client.chat.completions.create(
+            model=COMPLEX_MODEL,
+            messages=[
+                {"role": "system", "content": "You are a SQL verifier. Return only JSON."},
+                {"role": "user", "content": prompt},
+            ],
+            temperature=0.0,
+            max_tokens=100,
+        )
+        text = response.choices[0].message.content.strip().strip("```").strip()
+        if text.lower().startswith("json"):
+            text = text[4:].strip()
+        import json
+        result = json.loads(text)
+        return result.get("correct", True)
+    except Exception:
+        return True
+
+
 def generate_sql(question, schema, history=None, retries=1):
     if not _has_api_key():
         return None
-    today, current_month, last_month, current_year, seven_days_ago, week_start, last_week_start, days_elapsed, days_in_month, last_year = _fmt_dates()
+    fmt = _fmt_dates()
+    today, current_month, last_month, current_year, seven_days_ago, week_start, last_week_start, days_elapsed, days_in_month, last_year = fmt
     hist_text = _fmt_history(history, max_entries=3)
-    prompt = SQL_PROMPT.format(
+
+    buckets = _classify_question(question)
+    examples_text = _select_examples(buckets, "prompt")
+
+    prompt = SQL_PROMPT_TEMPLATE.format(
         today=today, current_month=current_month, last_month=last_month,
         current_year=current_year, last_year=last_year,
         seven_days_ago=seven_days_ago,
         week_start=week_start, last_week_start=last_week_start,
         days_elapsed=days_elapsed, days_in_month=days_in_month,
         schema=schema, question=question, history=hist_text,
+        examples=examples_text,
     )
     last_error = None
     for attempt in range(retries + 1):
         try:
             client = _get_client()
             response = client.chat.completions.create(
-                model="llama-3.1-8b-instant",
+                model=COMPLEX_MODEL,
                 messages=[
                     {"role": "system", "content": "You are a SQL query generator. Return only the SQL query."},
                     {"role": "user", "content": prompt},
@@ -240,6 +291,12 @@ def generate_sql(question, schema, history=None, retries=1):
             if sql.lower().startswith("sql"):
                 sql = sql[3:].strip()
             if sql.upper().startswith("SELECT") and "user_id = :uid" in sql:
+                if attempt == 0:
+                    is_valid = _verify_sql(sql, question)
+                    if not is_valid:
+                        prompt += "\n\nThe SQL above has issues. Make sure it correctly filters by categories, dates, or amounts mentioned in the question. Generate a corrected SQL."
+                        last_error = "Self-verification failed"
+                        continue
                 return sql
             if attempt < retries:
                 prompt += "\n\nThe previous SQL was invalid. Make sure it starts with SELECT and includes user_id = :uid in the WHERE clause."
@@ -262,7 +319,7 @@ def correct_sql(sql, error, schema, question, history=None):
     try:
         client = _get_client()
         response = client.chat.completions.create(
-            model="llama-3.1-8b-instant",
+            model=COMPLEX_MODEL,
             messages=[
                 {"role": "system", "content": "You are a SQL query fixer. Return only the corrected SQL."},
                 {"role": "user", "content": prompt},
@@ -293,7 +350,7 @@ def answer_from_results(question, sql, results, history=None):
     try:
         client = _get_client()
         response = client.chat.completions.create(
-            model="llama-3.1-8b-instant",
+            model=COMPLEX_MODEL,
             messages=[
                 {"role": "system", "content": "You are a friendly Bangladeshi personal finance assistant."},
                 {"role": "user", "content": prompt},
@@ -351,6 +408,27 @@ def format_answer(columns, data, question):
         else:
             text = f"You have exceeded your budget{' for ' + cat if cat else ''} by ৳{abs(remaining):.2f} (spent ৳{spent:.2f} of ৳{budget:.2f})."
         return {"text": text, "type": "budget", "spent": spent, "budget": budget, "remaining": remaining, "category": cat, "pct": pct}
+
+    budget_amount_col = next((c for c in columns if c.lower() == "budget_amount"), None)
+
+    if budget_amount_col is not None and daily_avg_col and days_elapsed_col and days_in_month_col and amt_col:
+        row = data[0]
+        total_spent = float(row.get(amt_col, 0))
+        daily_avg = float(row.get(daily_avg_col, 0))
+        de = int(row.get(days_elapsed_col, 1))
+        dim = int(row.get(days_in_month_col, 30))
+        projected = round(daily_avg * dim, 0)
+        budget = float(row.get(budget_amount_col, 0))
+        left_days = dim - de
+        will_exceed = projected > budget if budget else None
+        if budget:
+            if will_exceed:
+                text = f"At ৳{daily_avg:,.0f}/day you're on track to spend ৳{projected:,.0f} by end of month — exceeding your ৳{budget:,.0f} budget by ৳{projected - budget:,.0f}."
+            else:
+                text = f"At ৳{daily_avg:,.0f}/day you're on track to spend ৳{projected:,.0f} by end of month, well within your ৳{budget:,.0f} budget ({left_days} day(s) left)."
+        else:
+            text = f"Spent ৳{total_spent:,.0f} in {de} day(s) (avg: ৳{daily_avg:,.0f}/day). On track for ৳{projected:,.0f} by end of month ({left_days} day(s) left)."
+        return {"text": text, "type": "forecast", "total": total_spent, "daily_avg": daily_avg, "projected": projected, "days_elapsed": de, "days_in_month": dim, "budget": budget, "will_exceed": will_exceed}
 
     if daily_avg_col and days_elapsed_col and days_in_month_col and amt_col:
         row = data[0]
@@ -422,6 +500,15 @@ def format_answer(columns, data, question):
         label = "Most" if is_max else "Least"
         text = f"{label} expensive{suffix}: ৳{val:.2f}."
         return {"text": text, "type": "extremum", "value": val, "description": desc, "category": cat, "is_max": is_max}
+
+    if cat_col and amt_col and len(data) == 2 and question and re.search(r'\b(more|less|than|vs)\b', question, re.IGNORECASE):
+        rows_sorted = sorted(data, key=lambda r: float(r.get(amt_col, 0)), reverse=True)
+        c1, a1 = _display_cat(rows_sorted[0].get(cat_col, "")), float(rows_sorted[0].get(amt_col, 0))
+        c2, a2 = _display_cat(rows_sorted[1].get(cat_col, "")), float(rows_sorted[1].get(amt_col, 0))
+        diff = abs(a1 - a2)
+        more_less = "more" if a1 > a2 else "less"
+        text = f"Spent ৳{a1:.2f} on {c1} vs ৳{a2:.2f} on {c2}. That's ৳{diff:.2f} {more_less} on {c1}."
+        return {"text": text, "type": "comparison", "months": [{"label": c1, "amount": a1}, {"label": c2, "amount": a2}]}
 
     if cat_col and amt_col and len(data) > 1:
         total = sum(float(r.get(amt_col, 0)) for r in data)

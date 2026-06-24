@@ -2145,6 +2145,40 @@ body {
   display: block;
 }
 
+.rich-pacing-track {
+  margin-top: 8px;
+  height: 6px;
+  background: var(--bg);
+  border-radius: 3px;
+  overflow: hidden;
+}
+.rich-pacing-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--primary), #a78bfa);
+  border-radius: 3px;
+  transition: width 0.4s ease;
+}
+.rich-pacing-sub {
+  font-size: 11px;
+  color: var(--text-secondary);
+  text-align: center;
+  margin-top: 3px;
+}
+.rich-compare-diff {
+  text-align: center;
+  margin-top: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 4px;
+  border-radius: 4px;
+}
+.rich-compare-diff.up { color: #ef4444; background: #fef2f2; }
+.rich-compare-diff.down { color: #22c55e; background: #f0fdf4; }
+.rich-compare-diff.same { color: var(--text-secondary); background: var(--bg); }
+[data-theme="dark"] .rich-compare-diff.up { background: #3b0a0a; }
+[data-theme="dark"] .rich-compare-diff.down { background: #052e16; }
+[data-theme="dark"] .rich-compare-diff.same { background: #1e293b; }
+
 .collapse-icon {
   font-size: 12px;
   color: var(--text-secondary);
@@ -2171,6 +2205,20 @@ body {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+.chat-voice-preview {
+  font-size: 11px;
+  color: var(--accent);
+  padding: 2px 8px;
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  animation: pulse-text 1.5s ease-in-out infinite;
+}
+@keyframes pulse-text {
+  0%, 100% { opacity: 0.6; }
+  50% { opacity: 1; }
 }
 
 /* ── Chat Data Table ── */
@@ -2222,6 +2270,32 @@ body {
 }
 .chat-show-more:hover {
   background: var(--hover-bg);
+}
+.td-sortable {
+  cursor: pointer;
+  user-select: none;
+}
+.td-sortable:hover {
+  color: var(--accent);
+}
+.td-sort-arrow {
+  font-size: 10px;
+}
+.td-amount {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+.td-count {
+  font-weight: 600;
+}
+.chat-data-table td .category-badge {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 8px;
+  font-size: 11px;
+  font-weight: 500;
+  border: 1px solid;
 }
 
 /* ── Typing Dots ── */
