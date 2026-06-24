@@ -2489,7 +2489,8 @@ function renderDataTable(columns, data) {
   const storeId = 'td-' + window._tableStore.length;
   window._tableStore.push({ columns: visibleCols, data: [...data], shown: maxRows });
 
-  return `<div class="chat-data-table" id="${storeId}">${_renderTable(visibleCols, data, maxRows)}${_tableFooter(null, window._tableStore.length - 1)}</div>`;
+  const store = window._tableStore[window._tableStore.length - 1];
+  return `<div class="chat-data-table" id="${storeId}">${_renderTable(visibleCols, data, maxRows)}${_tableFooter(store, window._tableStore.length - 1)}</div>`;
 }
 
 function showMoreTable(idx) {
