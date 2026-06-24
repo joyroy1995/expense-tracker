@@ -414,7 +414,7 @@ def api_ask():
         return jsonify({"error": "Could not answer this question"}), 500
     if "error" in result:
         return jsonify(result), 500
-    return jsonify(result)
+    return jsonify({"type": "question", **result})
 
 
 # ── Dynamic Suggestions ──────────────────────────────────────

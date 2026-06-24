@@ -182,12 +182,12 @@ VERIFY_SQL_PROMPT = """You are a SQL query verifier. Given a user's question and
 Question: {question}
 Generated SQL: {sql}
 
-Check:
-1. Does the SQL WHERE clause filter by the categories, dates, or amounts mentioned in the question?
-2. Does the SQL SELECT the right columns (aggregate for totals, individual rows for lists)?
-3. Does the SQL include user_id = :uid for data isolation?
+Check in this order:
+1. Does the SQL include user_id = :uid? This is MANDATORY — every query filters by current user. Even "all expenses" means "all of MY expenses". If :uid is missing, return {{"correct": false, "reason": "Missing user_id = :uid filter"}}.
+2. Does the SELECT clause make sense? Aggregate (SUM/COUNT/AVG) for totals, columns for lists.
+3. Are the filters appropriate? The SQL should only filter by things the user mentioned.
 
-Return ONLY a JSON object: {{"correct": true}} or {{"correct": false, "reason": "..."}}
+Return ONLY JSON: {{"correct": true}} or {{"correct": false, "reason": "..."}}
 """
 
 ANSWER_PROMPT = """You are a friendly Bangladeshi personal finance assistant. Today is {today}.

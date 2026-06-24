@@ -2565,6 +2565,10 @@ async function sendChatMessage() {
       suggestions = fallback.slice(0, 3);
     }
     addChatMessage('ai', d.answer || 'I found ' + (d.data ? d.data.length : 0) + ' result(s).', d.sql, d.data, d.columns, suggestions);
+  } catch (e) {
+    console.error('sendChatMessage error:', e);
+    chatMessages = chatMessages.filter(m => m.type !== 'loading');
+    addChatMessage('ai', 'Sorry, something went wrong. Please try again.');
   } finally {
     isSendingMessage = false;
   }
