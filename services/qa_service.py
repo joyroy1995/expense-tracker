@@ -42,6 +42,10 @@ def _log_trace(question, trace):
         return
     stages = [f"{k}={v}ms" for k, v in trace.items() if isinstance(v, (int, float))]
     print(f"[TRACE] {trace.get('source', 'cache')} | {' | '.join(stages)} | q={question[:60]}", file=sys.stderr)
+    if trace.get('source') == 'llm' and trace.get('answer') and trace['answer'] > 10000:
+        print(f"[WARN] LLM call took {trace['answer']}ms for question: {question[:100]}", file=sys.stderr)
+    if trace.get('error') and 'LLM' in trace['error']:
+        print(f"[ERROR] LLM failed for question '{question[:100]}': {trace['error']}", file=sys.stderr)
 
 
 _TIME_PERIODS = [

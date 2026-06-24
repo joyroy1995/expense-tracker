@@ -1,6 +1,7 @@
 import json
+import sys
 from datetime import date as _d
-from llm.config import _get_client, _has_api_key, COMPLEX_MODEL
+from llm.config import _get_client, _has_api_key, COMPLEX_MODEL, LLM_TIMEOUT
 
 FORECAST_PROMPT = """You are a personal finance forecasting assistant. Given the user's daily spending data, predict their end-of-month total.
 
@@ -124,6 +125,9 @@ def generate_forecast(data):
 
     try:
         client = _get_client()
+        if not client:
+            print(f"[ERROR] Groq client not available for generate_forecast", file=sys.stderr)
+            return None
         response = client.chat.completions.create(
             model=COMPLEX_MODEL,
             messages=[
@@ -132,6 +136,7 @@ def generate_forecast(data):
             ],
             temperature=0.3,
             max_tokens=300,
+            timeout=LLM_TIMEOUT,
         )
         text = response.choices[0].message.content.strip().strip("```").strip()
         if text.lower().startswith("json"):
@@ -145,5 +150,6 @@ def generate_forecast(data):
             "worst_case": result.get("worst_case"),
             "notes": result.get("notes", ""),
         }
-    except Exception:
+    except Exception as e:
+        print(f"[ERROR] generate_forecast failed: {type(e).__name__}: {e}", file=sys.stderr)
         return None

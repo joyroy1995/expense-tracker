@@ -2,7 +2,8 @@ import json
 import base64
 import os
 import urllib.request
-from llm.config import _get_client
+import sys
+from llm.config import _get_client, LLM_TIMEOUT
 from llm.categories import keyword_category, extract_amount_fallback
 
 RECEIPT_SCAN_PROMPT = """You are a receipt parser for a Bangladeshi expense tracker.
@@ -41,6 +42,7 @@ def _scan_receipt_groq(image_bytes):
                 }],
                 temperature=0.1,
                 max_tokens=1000,
+                timeout=LLM_TIMEOUT,
             )
             text = response.choices[0].message.content.strip().strip("```").strip()
             if text.lower().startswith("json"):
@@ -49,9 +51,11 @@ def _scan_receipt_groq(image_bytes):
             return parsed, None
         except json.JSONDecodeError as e:
             last_error = f"Groq vision ({model}): invalid JSON response - {e}"
+            print(f"[ERROR] _scan_receipt_groq JSON decode error: {last_error}", file=sys.stderr)
         except Exception as e:
             last_error = f"Groq vision ({model}): {type(e).__name__} - {e}"
-        continue
+            print(f"[ERROR] _scan_receipt_groq failed: {last_error}", file=sys.stderr)
+            continue
     return None, last_error
 
 
@@ -85,9 +89,13 @@ def _scan_receipt_gemini(image_bytes):
         parsed = json.loads(text)
         return parsed, None
     except json.JSONDecodeError as e:
-        return None, f"Gemini: invalid JSON response - {e}"
+        error_msg = f"Gemini: invalid JSON response - {e}"
+        print(f"[ERROR] _scan_receipt_gemini JSON decode error: {error_msg}", file=sys.stderr)
+        return None, error_msg
     except Exception as e:
-        return None, f"Gemini: {type(e).__name__} - {e}"
+        error_msg = f"Gemini: {type(e).__name__} - {e}"
+        print(f"[ERROR] _scan_receipt_gemini failed: {error_msg}", file=sys.stderr)
+        return None, error_msg
 
 
 def scan_receipt(image_bytes):
@@ -110,4 +118,6 @@ def scan_receipt(image_bytes):
             _categorize_items(result["items"])
             return result
         return {"error": "Receipt detected but no line items found. Try a clearer photo."}
-    return {"error": error if error else gemini_error or "No vision API available. Set GROQ_API_KEY or GEMINI_API_KEY."}
+    error_msg = error if error else gemini_error or "No vision API available. Set GROQ_API_KEY or GEMINI_API_KEY."
+    print(f"[ERROR] scan_receipt failed: {error_msg}", file=sys.stderr)
+    return {"error": error_msg}

@@ -1,6 +1,6 @@
 import json
 import re
-from llm.config import _get_client, _has_api_key, FAST_MODEL
+from llm.config import _get_client, _has_api_key, FAST_MODEL, LLM_TIMEOUT
 from llm.categories import CATEGORIES, CATEGORIES_STR
 from llm.expenses import check_learned
 
@@ -50,6 +50,9 @@ def split_expenses(description, learned_categories=None):
         return None
     try:
         client = _get_client()
+        if not client:
+            print(f"[ERROR] Groq client not available for split_expenses", file=sys.stderr)
+            return None
         response = client.chat.completions.create(
             model=FAST_MODEL,
             messages=[
@@ -57,6 +60,7 @@ def split_expenses(description, learned_categories=None):
                 {"role": "user", "content": f"{SPLIT_PROMPT}\n\nInput: {description}\nOutput:"},
             ],
             temperature=0.1,
+            timeout=LLM_TIMEOUT,
         )
         text = response.choices[0].message.content.strip().strip("```").strip()
         if text.startswith("json"):
@@ -82,5 +86,6 @@ def split_expenses(description, learned_categories=None):
                 if learned_cat:
                     item["category"] = learned_cat
         return items
-    except Exception:
+    except Exception as e:
+        print(f"[ERROR] split_expenses failed: {type(e).__name__}: {e}", file=sys.stderr)
         return None

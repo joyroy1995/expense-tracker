@@ -1,6 +1,7 @@
 import json
+import sys
 from datetime import date as _d
-from llm.config import _get_client, _has_api_key, COMPLEX_MODEL
+from llm.config import _get_client, _has_api_key, COMPLEX_MODEL, LLM_TIMEOUT
 from llm.qa import _fmt_history
 
 _QUESTION_WORDS = {"what", "how", "why", "show", "tell", "list", "give", "which", "when", "where", "who", "did", "do", "does", "is", "are", "was", "were", "can", "could", "would", "will"}
@@ -88,6 +89,9 @@ def decompose_question(question, schema, history=None):
     prompt = DECOMPOSE_PROMPT.format(question=question, history=hist_text)
     try:
         client = _get_client()
+        if not client:
+            print(f"[ERROR] Groq client not available for decompose_question", file=sys.stderr)
+            return None
         response = client.chat.completions.create(
             model=COMPLEX_MODEL,
             messages=[
@@ -96,6 +100,7 @@ def decompose_question(question, schema, history=None):
             ],
             temperature=0.1,
             max_tokens=200,
+            timeout=LLM_TIMEOUT,
         )
         text = response.choices[0].message.content.strip().strip("```").strip()
         if text.lower().startswith("json"):
@@ -107,7 +112,8 @@ def decompose_question(question, schema, history=None):
         if len(subs) < 2:
             return None
         return subs[:3]
-    except Exception:
+    except Exception as e:
+        print(f"[ERROR] decompose_question failed: {type(e).__name__}: {e}", file=sys.stderr)
         return None
 
 
@@ -133,6 +139,10 @@ def compose_answers(question, sub_results, history=None):
     )
     try:
         client = _get_client()
+        if not client:
+            print(f"[ERROR] Groq client not available for compose_answers", file=sys.stderr)
+            answers = [_extract_text(r.get("answer", "")) for r in sub_results if r.get("answer")]
+            return " ".join(answers) if answers else None
         response = client.chat.completions.create(
             model=COMPLEX_MODEL,
             messages=[
@@ -141,8 +151,10 @@ def compose_answers(question, sub_results, history=None):
             ],
             temperature=0.1,
             max_tokens=300,
+            timeout=LLM_TIMEOUT,
         )
         return response.choices[0].message.content.strip()
-    except Exception:
+    except Exception as e:
+        print(f"[ERROR] compose_answers failed: {type(e).__name__}: {e}", file=sys.stderr)
         answers = [_extract_text(r.get("answer", "")) for r in sub_results if r.get("answer")]
         return " ".join(answers) if answers else None

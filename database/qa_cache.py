@@ -18,7 +18,7 @@ SCHEMA_VERSION = 3
 
 OVERALL_BUDGET_CATEGORY = "__overall__"
 
-_RESPONSE_CACHE_TTL_SECONDS = 60
+_RESPONSE_CACHE_TTL_SECONDS = 300
 
 _STOP_WORDS = frozenset({
     "me", "my", "the", "a", "an", "did", "do", "does", "is", "are",

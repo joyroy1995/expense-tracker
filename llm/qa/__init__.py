@@ -1,8 +1,9 @@
 import json
 import re
 import calendar
+import sys
 from datetime import date as _d, timedelta
-from llm.config import _get_client, _has_api_key, COMPLEX_MODEL
+from llm.config import _get_client, _has_api_key, COMPLEX_MODEL, LLM_TIMEOUT
 
 
 def _fmt_history(history, max_entries=6):
@@ -236,6 +237,9 @@ def _verify_sql(sql, question):
     prompt = VERIFY_SQL_PROMPT.format(question=q, sql=s)
     try:
         client = _get_client()
+        if not client:
+            print(f"[ERROR] Groq client not available for _verify_sql", file=sys.stderr)
+            return True
         response = client.chat.completions.create(
             model=COMPLEX_MODEL,
             messages=[
@@ -244,6 +248,7 @@ def _verify_sql(sql, question):
             ],
             temperature=0.0,
             max_tokens=100,
+            timeout=LLM_TIMEOUT,
         )
         text = response.choices[0].message.content.strip().strip("```").strip()
         if text.lower().startswith("json"):
@@ -251,7 +256,8 @@ def _verify_sql(sql, question):
         import json
         result = json.loads(text)
         return result.get("correct", True)
-    except Exception:
+    except Exception as e:
+        print(f"[ERROR] _verify_sql failed: {type(e).__name__}: {e}", file=sys.stderr)
         return True
 
 
@@ -278,6 +284,9 @@ def generate_sql(question, schema, history=None, retries=1):
     for attempt in range(retries + 1):
         try:
             client = _get_client()
+            if not client:
+                print(f"[ERROR] Groq client not available for generate_sql", file=sys.stderr)
+                raise RuntimeError("Groq client not available")
             response = client.chat.completions.create(
                 model=COMPLEX_MODEL,
                 messages=[
@@ -286,6 +295,7 @@ def generate_sql(question, schema, history=None, retries=1):
                 ],
                 temperature=0.1,
                 max_tokens=250,
+                timeout=LLM_TIMEOUT,
             )
             sql = response.choices[0].message.content.strip().strip("```").strip()
             if sql.lower().startswith("sql"):
@@ -304,6 +314,7 @@ def generate_sql(question, schema, history=None, retries=1):
                 last_error = "Generated SQL missing SELECT or :uid filter"
         except Exception as e:
             last_error = str(e)
+            print(f"[ERROR] generate_sql attempt {attempt + 1}/{retries + 1} failed: {type(e).__name__}: {e}", file=sys.stderr)
             if attempt < retries:
                 prompt += f"\n\nThere was an error: {last_error}. Please generate a corrected SQL query."
     if last_error:
@@ -318,6 +329,9 @@ def correct_sql(sql, error, schema, question, history=None):
     prompt = CORRECT_SQL_PROMPT.format(sql=sql, error=error, schema=schema, question=question, history=hist_text)
     try:
         client = _get_client()
+        if not client:
+            print(f"[ERROR] Groq client not available for correct_sql", file=sys.stderr)
+            return None
         response = client.chat.completions.create(
             model=COMPLEX_MODEL,
             messages=[
@@ -326,6 +340,7 @@ def correct_sql(sql, error, schema, question, history=None):
             ],
             temperature=0.1,
             max_tokens=200,
+            timeout=LLM_TIMEOUT,
         )
         fixed = response.choices[0].message.content.strip().strip("```").strip()
         if fixed.lower().startswith("sql"):
@@ -333,7 +348,8 @@ def correct_sql(sql, error, schema, question, history=None):
         if fixed.upper().startswith("SELECT") and "user_id = :uid" in fixed:
             return fixed
         return None
-    except Exception:
+    except Exception as e:
+        print(f"[ERROR] correct_sql failed: {type(e).__name__}: {e}", file=sys.stderr)
         return None
 
 
@@ -349,6 +365,9 @@ def answer_from_results(question, sql, results, history=None):
     )
     try:
         client = _get_client()
+        if not client:
+            print(f"[ERROR] Groq client not available for answer_from_results", file=sys.stderr)
+            return None
         response = client.chat.completions.create(
             model=COMPLEX_MODEL,
             messages=[
@@ -357,9 +376,12 @@ def answer_from_results(question, sql, results, history=None):
             ],
             temperature=0.1,
             max_tokens=300,
+            timeout=LLM_TIMEOUT,
         )
         return response.choices[0].message.content.strip()
-    except Exception:
+    except Exception as e:
+        print(f"[ERROR] answer_from_results failed: {type(e).__name__}: {e}", file=sys.stderr)
+        return None
         return None
 
 
