@@ -2608,7 +2608,7 @@ async function confirmChatExpenses(index) {
   renderChatMessages();
 
   const date = msg.date || new Date().toISOString().slice(0, 10);
-  const res = await api.post('/api/expenses/bulk', { date, items: msg.items });
+  const res = await api.post('/api/expenses/bulk', { date, items: msg.items, from_chat: true });
   if (!res.ok) {
     showToast(res.error || 'Failed to save expenses', 'error');
     msg.saving = false;

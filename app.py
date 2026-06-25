@@ -630,21 +630,24 @@ def api_expenses_bulk():
             "color": CATEGORY_COLORS.get(category, "#6b7280"),
         })
 
-    budget_alerts = db.get_budget_status(session["user_id"])
-    budget_alerts = [b for b in budget_alerts if b["percentage"] >= 80]
+    if not data.get("from_chat"):
+        budget_alerts = db.get_budget_status(session["user_id"])
+        budget_alerts = [b for b in budget_alerts if b["percentage"] >= 80]
 
-    if budget_alerts:
-        alerts_body = "; ".join(
-            f"{a['category']} at {a['percentage']}% (৳{a['spent']:,.0f}/৳{a['budget_amount']:,.0f})"
-            for a in budget_alerts
-        )
-        NotificationService.send_push_notification(
-            user_id=session["user_id"],
-            title="⚠️ Budget Alert",
-            body=alerts_body,
-            tag="budget-alert",
-            data={"type": "budget", "alerts": budget_alerts},
-        )
+        if budget_alerts:
+            alerts_body = "; ".join(
+                f"{a['category']} at {a['percentage']}% (৳{a['spent']:,.0f}/৳{a['budget_amount']:,.0f})"
+                for a in budget_alerts
+            )
+            NotificationService.send_push_notification(
+                user_id=session["user_id"],
+                title="⚠️ Budget Alert",
+                body=alerts_body,
+                tag="budget-alert",
+                data={"type": "budget", "alerts": budget_alerts},
+            )
+    else:
+        budget_alerts = []
 
     return jsonify({"count": len(saved), "expenses": saved, "budget_alerts": budget_alerts})
 
@@ -684,21 +687,24 @@ def api_add_expense():
 
     expense_id = db.add_expense(date, clean_desc, amount, category, user_id=session["user_id"])
 
-    budget_alerts = db.get_budget_status(session["user_id"])
-    budget_alerts = [b for b in budget_alerts if b["percentage"] >= 80]
+    if not data.get("from_chat"):
+        budget_alerts = db.get_budget_status(session["user_id"])
+        budget_alerts = [b for b in budget_alerts if b["percentage"] >= 80]
 
-    if budget_alerts:
-        alerts_body = "; ".join(
-            f"{a['category']} at {a['percentage']}% (৳{a['spent']:,.0f}/৳{a['budget_amount']:,.0f})"
-            for a in budget_alerts
-        )
-        NotificationService.send_push_notification(
-            user_id=session["user_id"],
-            title="⚠️ Budget Alert",
-            body=alerts_body,
-            tag="budget-alert",
-            data={"type": "budget", "alerts": budget_alerts},
-        )
+        if budget_alerts:
+            alerts_body = "; ".join(
+                f"{a['category']} at {a['percentage']}% (৳{a['spent']:,.0f}/৳{a['budget_amount']:,.0f})"
+                for a in budget_alerts
+            )
+            NotificationService.send_push_notification(
+                user_id=session["user_id"],
+                title="⚠️ Budget Alert",
+                body=alerts_body,
+                tag="budget-alert",
+                data={"type": "budget", "alerts": budget_alerts},
+            )
+    else:
+        budget_alerts = []
 
     return jsonify(
         {
