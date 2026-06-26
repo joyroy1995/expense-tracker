@@ -91,6 +91,7 @@ function getRoute() {
 function navigate(path) {
   if (path === window.location.pathname + window.location.search) return;
   history.pushState(null, '', path);
+  setActiveNavLink();
   renderRoute();
 }
 
@@ -134,11 +135,15 @@ function setLayout(type) {
     if (adminNotifLink) {
       adminNotifLink.style.display = currentUser?.role === 'superuser' ? '' : 'none';
     }
-    const path = window.location.pathname;
-    document.querySelectorAll('.nav-link[data-link]').forEach(el => {
-      el.classList.toggle('active', el.getAttribute('href') === path);
-    });
+    setActiveNavLink();
   }
+}
+
+function setActiveNavLink() {
+  const path = window.location.pathname;
+  document.querySelectorAll('.nav-link[data-link]').forEach(el => {
+    el.classList.toggle('active', el.getAttribute('href') === path);
+  });
 }
 
 document.addEventListener('click', (e) => {
@@ -310,7 +315,6 @@ async function deleteExpense(id) {
 // ── Login ──
 async function renderLogin() {
   setLayout('auth');
-  document.title = 'Sign In - Expense Tracker';
   const app = document.getElementById('app');
   app.innerHTML = `
     <div class="login-card">
@@ -382,7 +386,6 @@ async function renderLogin() {
 // ── Register ──
 async function renderRegister() {
   setLayout('auth');
-  document.title = 'Register - Expense Tracker';
   const app = document.getElementById('app');
   app.innerHTML = `
     <div class="login-card">
@@ -440,7 +443,6 @@ async function renderRegister() {
 // ── Forgot Password ──
 async function renderForgotPassword() {
   setLayout('auth');
-  document.title = 'Forgot Password - Expense Tracker';
   const app = document.getElementById('app');
   app.innerHTML = `
     <div class="login-card">
@@ -483,7 +485,6 @@ async function renderForgotPassword() {
 // ── Reset Password ──
 async function renderResetPassword(token) {
   setLayout('auth');
-  document.title = 'Reset Password - Expense Tracker';
   const app = document.getElementById('app');
 
   // Validate token first
@@ -537,7 +538,6 @@ async function renderResetPassword(token) {
 // ── Home ──
 async function renderHome(page = 1) {
   setLayout('app');
-  document.title = 'Expense Tracker';
   const app = document.getElementById('app');
 
   const res = await api.get(`/api/index?page=${page}`);
@@ -1020,7 +1020,6 @@ let expandedCategory = null;
 
 async function renderDashboard(params) {
   setLayout('app');
-  document.title = 'Dashboard - Expense Tracker';
   const app = document.getElementById('app');
   const now = new Date();
   const year = parseInt(params.year) || now.getFullYear();
@@ -1367,7 +1366,6 @@ function initCharts(categoryTotals, monthlyTotals, colors) {
 // ── Profile ──
 async function renderProfile() {
   setLayout('app');
-  document.title = 'Profile - Expense Tracker';
   const app = document.getElementById('app');
 
   const res = await api.get('/api/profile');
@@ -1464,7 +1462,6 @@ function catDisplayName(cat) {
 
 async function renderBudgets() {
   setLayout('app');
-  document.title = 'Budgets - Expense Tracker';
   const app = document.getElementById('app');
   app.innerHTML = '<div class="budget-page page-loader"><div class="spinner-lg"></div></div>';
 
@@ -1584,7 +1581,6 @@ async function deleteBudget(id) {
 async function renderAdminUsers() {
   if (currentUser?.role !== 'superuser') { navigate('/'); return; }
   setLayout('app');
-  document.title = 'Admin - Expense Tracker';
   const app = document.getElementById('app');
 
   const res = await api.get('/api/admin/users');
@@ -1640,7 +1636,6 @@ async function adminDeleteUser(userId) {
 async function renderAdminNotifications() {
   if (currentUser?.role !== 'superuser') { navigate('/'); return; }
   setLayout('app');
-  document.title = 'Daily Digest - Expense Tracker';
   const app = document.getElementById('app');
 
   app.innerHTML = `
@@ -2829,6 +2824,30 @@ async function renderRoute() {
   const { view, params, token } = getRoute();
   const authViews = ['login', 'register', 'forgot-password', 'reset-password'];
 
+  const pageInfo = {
+    'home':               { topbar: 'Home',            title: 'Expense Tracker' },
+    'dashboard':          { topbar: 'Dashboard',       title: 'Dashboard - Expense Tracker' },
+    'calendar':           { topbar: 'Calendar',        title: 'Calendar - Expense Tracker' },
+    'budgets':            { topbar: 'Budgets',         title: 'Budgets - Expense Tracker' },
+    'recurring':          { topbar: 'Recurring',       title: 'Recurring - Expense Tracker' },
+    'profile':            { topbar: 'Profile',         title: 'Profile - Expense Tracker' },
+    'admin-users':        { topbar: 'Admin',           title: 'Admin - Expense Tracker' },
+    'admin-notifications':{ topbar: 'Digest',          title: 'Daily Digest - Expense Tracker' },
+    'login':              { topbar: 'Sign In',         title: 'Sign In - Expense Tracker' },
+    'register':           { topbar: 'Register',        title: 'Register - Expense Tracker' },
+    'forgot-password':    { topbar: 'Forgot Password', title: 'Forgot Password - Expense Tracker' },
+    'reset-password':     { topbar: 'Reset Password',  title: 'Reset Password - Expense Tracker' },
+  };
+
+  function updateTitles(v) {
+    const info = pageInfo[v];
+    if (info) {
+      document.title = info.title;
+      const el = document.querySelector('.topbar-title');
+      if (el) el.textContent = info.topbar;
+    }
+  }
+
   // If not logged in and trying to access protected route, redirect to login
   if (!currentUser && !authViews.includes(view)) {
     navigate('/login');
@@ -2845,6 +2864,9 @@ async function renderRoute() {
     const app = document.getElementById('app');
     app.innerHTML = '<div class="page-loader"><div class="spinner-lg"></div></div>';
   }
+
+  updateTitles(view);
+  setActiveNavLink();
 
   switch (view) {
     case 'login': renderLogin(); break;
@@ -2867,7 +2889,6 @@ async function renderRoute() {
 
 async function renderCalendar() {
   setLayout('app');
-  document.title = 'Calendar - Expense Tracker';
   const app = document.getElementById('app');
   const now = new Date();
   let year = now.getFullYear();
@@ -2989,7 +3010,6 @@ async function renderCalendar() {
 
 async function renderRecurringTransactions() {
   setLayout('app');
-  document.title = 'Recurring - Expense Tracker';
   const app = document.getElementById('app');
   app.innerHTML = '<div class="page-loader"><div class="spinner-lg"></div></div>';
 

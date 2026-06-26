@@ -14,6 +14,8 @@
     --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
     --radius: 12px;
     --radius-sm: 8px;
+    --sidebar-bg: linear-gradient(180deg, #fafafa, #f1f5f9);
+    --sidebar-hover: rgba(99, 102, 241, 0.08);
 }
 
 [data-theme="dark"] {
@@ -30,6 +32,8 @@
     --error: #fca5a5;
     --shadow: 0 1px 3px rgba(0, 0, 0, 0.4), 0 1px 2px rgba(0, 0, 0, 0.3);
     --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.5), 0 4px 6px -2px rgba(0, 0, 0, 0.3);
+    --sidebar-bg: linear-gradient(180deg, #0f172a, #1a2332);
+    --sidebar-hover: rgba(165, 180, 252, 0.08);
 }
 
 * {
@@ -153,21 +157,22 @@ body {
     left: 0;
     width: 240px;
     height: 100vh;
-    background: var(--card-bg);
+    background: var(--sidebar-bg);
     border-right: 1px solid var(--border);
     display: flex;
     flex-direction: column;
     z-index: 200;
     overflow-y: auto;
-    transition: width 0.3s ease, transform 0.3s ease;
+    transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1), transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 .sidebar-header {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 20px;
+    padding: 20px 20px 16px;
     border-bottom: 1px solid var(--border);
+    box-shadow: 0 1px 0 rgba(0, 0, 0, 0.02);
 }
 
 .sidebar-brand {
@@ -185,40 +190,49 @@ body {
 .sidebar-toggle {
     background: none;
     border: none;
-    font-size: 22px;
+    font-size: 20px;
     color: var(--text-secondary);
     cursor: pointer;
-    padding: 4px 8px;
+    padding: 6px 10px;
     line-height: 1;
     border-radius: var(--radius-sm);
-    transition: background 0.2s, transform 0.3s ease;
+    transition: background 0.2s cubic-bezier(0.4, 0, 0.2, 1), transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
     flex-shrink: 0;
 }
 
 .sidebar-toggle:hover {
-    background: var(--bg);
+    background: var(--sidebar-hover);
     color: var(--text);
 }
 
 .nav-icon {
-    width: 24px;
+    width: 32px;
+    height: 32px;
     flex-shrink: 0;
     font-size: 18px;
     text-align: center;
+    line-height: 32px;
+    border-radius: 8px;
+    transition: background 0.2s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 .sidebar-links {
     display: flex;
     flex-direction: column;
-    gap: 2px;
-    padding: 12px;
+    gap: 4px;
+    padding: 12px 10px;
     flex: 1;
     overflow-y: auto;
 }
 
 .sidebar-footer {
-    padding: 12px;
+    padding: 10px;
     border-top: 1px solid var(--border);
+    background: rgba(0, 0, 0, 0.02);
+}
+
+[data-theme="dark"] .sidebar-footer {
+    background: rgba(255, 255, 255, 0.02);
 }
 
 .sidebar-footer .nav-link,
@@ -231,30 +245,57 @@ body {
     text-align: left;
 }
 .sidebar-footer .theme-toggle-sidebar:hover {
-    background: var(--bg);
+    background: var(--sidebar-hover);
     color: var(--text);
 }
 
 .nav-link {
     display: flex;
     align-items: center;
-    padding: 12px 16px;
-    border-radius: var(--radius-sm);
+    gap: 10px;
+    padding: 10px 14px;
+    border-radius: 10px;
     text-decoration: none;
     color: var(--text-secondary);
     font-weight: 500;
     font-size: 14px;
-    transition: all 0.2s;
+    position: relative;
+    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 .nav-link:hover {
-    background: var(--bg);
+    background: var(--sidebar-hover);
     color: var(--text);
+    transform: translateX(2px);
 }
 
 .nav-link.active {
     background: var(--primary-light);
     color: var(--primary);
+    font-weight: 600;
+    transform: none;
+}
+
+.nav-link.active::before {
+    content: '';
+    position: absolute;
+    left: -10px;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 3px;
+    height: 20px;
+    border-radius: 0 3px 3px 0;
+    background: var(--primary);
+}
+
+.nav-link.active .nav-icon {
+    background: var(--primary);
+    color: #fff;
+    border-radius: 8px;
+}
+
+[data-theme="dark"] .nav-link.active .nav-icon {
+    color: #0c1222;
 }
 
 .nav-logout {
@@ -262,11 +303,11 @@ body {
 }
 
 .nav-logout:hover {
-    background: #fef2f2;
+    background: #fef2f2 !important;
 }
 
 [data-theme="dark"] .nav-logout:hover {
-    background: #3b1a1a;
+    background: #3b1a1a !important;
 }
 
 .sidebar-overlay {
@@ -283,20 +324,22 @@ body {
     top: 50%;
     left: 0;
     transform: translateY(-50%);
-    width: 5px;
-    height: 56px;
+    width: 4px;
+    height: 48px;
     background: var(--primary);
     border-radius: 0 4px 4px 0;
     cursor: pointer;
     z-index: 100;
-    opacity: 0.3;
-    transition: opacity 0.2s;
+    opacity: 0.25;
+    transition: opacity 0.2s cubic-bezier(0.4, 0, 0.2, 1), height 0.2s cubic-bezier(0.4, 0, 0.2, 1);
     pointer-events: auto;
+    box-shadow: 1px 0 4px rgba(99, 102, 241, 0.2);
 }
 
 @media (hover: hover) {
     .sidebar-tab:hover {
-        opacity: 0.7;
+        opacity: 0.6;
+        height: 56px;
     }
 }
 
@@ -1705,7 +1748,7 @@ body {
     }
 
     body.sidebar-collapsed .sidebar-header {
-        padding: 12px;
+        padding: 14px 0;
         justify-content: center;
     }
 
@@ -1717,25 +1760,41 @@ body {
         transform: rotate(180deg);
     }
 
+    body.sidebar-collapsed .sidebar-links {
+        padding: 12px 6px;
+    }
+
     body.sidebar-collapsed .nav-label {
         display: none;
     }
 
     body.sidebar-collapsed .nav-link {
         justify-content: center;
-        padding: 12px 0;
+        padding: 10px 0;
         font-size: 0;
+        gap: 0;
+    }
+
+    body.sidebar-collapsed .nav-link.active::before {
+        display: none;
     }
 
     body.sidebar-collapsed .nav-icon {
+        width: 36px;
+        height: 36px;
         font-size: 20px;
-        width: auto;
+        line-height: 36px;
+    }
+
+    body.sidebar-collapsed .sidebar-footer {
+        padding: 6px;
     }
 
     body.sidebar-collapsed .sidebar-footer .nav-link {
         justify-content: center;
-        padding: 12px 0;
+        padding: 10px 0;
         font-size: 0;
+        gap: 0;
     }
 
     body.sidebar-collapsed .container {
@@ -1743,7 +1802,7 @@ body {
     }
 
     .container {
-        transition: margin-left 0.3s ease;
+        transition: margin-left 0.3s cubic-bezier(0.4, 0, 0.2, 1);
     }
 }
 
