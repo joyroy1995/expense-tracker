@@ -147,7 +147,7 @@ SEED_CATEGORIES = {
 
 CATEGORY_COLORS = {
     "Food": "#10b981",
-    "Dining Out": "#f43f5e",
+    "Dining Out": "#0ea5e9",
     "Transport": "#3b82f6",
     "Shopping": "#ec4899",
     "Bills": "#f59e0b",
