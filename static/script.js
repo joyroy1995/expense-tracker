@@ -341,6 +341,11 @@ async function renderLogin() {
   document.getElementById('loginForm').addEventListener('submit', async (e) => {
     e.preventDefault();
     const errEl = document.getElementById('loginError');
+    const btn = e.target.querySelector('button[type="submit"]');
+    const originalHTML = btn.innerHTML;
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner" style="vertical-align:middle;margin-right:6px;"></span> Signing in...';
+    errEl.style.display = 'none';
     try {
       const username = document.getElementById('loginUsername').value.trim();
       const password = document.getElementById('loginPassword').value.trim();
@@ -367,6 +372,9 @@ async function renderLogin() {
     } catch (err) {
       errEl.textContent = err.message || 'Unexpected error';
       errEl.style.display = '';
+    } finally {
+      btn.disabled = false;
+      btn.innerHTML = originalHTML;
     }
   });
 }
