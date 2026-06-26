@@ -36,8 +36,15 @@
                     <label for="password">Password</label>
                     <input type="password" id="password" name="password" required placeholder="Enter password">
                 </div>
-                <button type="submit" class="btn btn-primary btn-full">Sign In</button>
+                <button type="submit" class="btn btn-primary btn-full" id="loginBtn">Sign In</button>
             </form>
+            <script>
+              document.querySelector('.login-form')?.addEventListener('submit', function() {
+                var btn = this.querySelector('button[type="submit"]');
+                btn.disabled = true;
+                btn.innerHTML = '<span class="spinner" style="vertical-align:middle;margin-right:6px;"></span> Signing in...';
+              });
+            </script>
             <div class="auth-links">
                 <a href="{{ url_for('register') }}">Create an account</a>
                 <span class="auth-sep">|</span>
