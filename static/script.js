@@ -2792,27 +2792,40 @@ document.getElementById('logoutBtn')?.addEventListener('click', async () => {
 });
 
 // Theme toggle handler
+const THEMES = ['', 'dark', 'oled-dark', 'sepia'];
+const THEME_ICONS = { '': '☀️', 'dark': '🌙', 'oled-dark': '🖤', 'sepia': '📜' };
+const THEME_LABELS = { '': 'Light', 'dark': 'Dark', 'oled-dark': 'OLED', 'sepia': 'Sepia' };
+
+function getNextTheme(current) {
+  const idx = THEMES.indexOf(current);
+  return THEMES[(idx + 1) % THEMES.length];
+}
+
 function syncThemeButton() {
   const btn = document.getElementById('themeToggle');
   if (!btn) return;
-  const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+  const current = document.documentElement.getAttribute('data-theme') || '';
+  const icon = THEME_ICONS[current] || '☀️';
+  const label = THEME_LABELS[current] || 'Light';
   if (btn.classList.contains('theme-toggle-sidebar')) {
-    btn.textContent = isDark ? '☀️ Light Mode' : '🌙 Dark Mode';
+    btn.innerHTML = `<span class="nav-icon">${icon}</span> <span class="nav-label">${label}</span>`;
   } else {
-    btn.textContent = isDark ? '☀️' : '🌙';
+    btn.textContent = icon;
   }
-  btn.title = isDark ? 'Switch to light mode' : 'Switch to dark mode';
+  const next = getNextTheme(current);
+  btn.title = `Switch to ${THEME_LABELS[next] || 'Light'}`;
 }
 
 function toggleTheme() {
   const html = document.documentElement;
-  const isDark = html.getAttribute('data-theme') === 'dark';
-  if (isDark) {
+  const current = html.getAttribute('data-theme') || '';
+  const next = getNextTheme(current);
+  if (next) {
+    html.setAttribute('data-theme', next);
+    localStorage.setItem('theme', next);
+  } else {
     html.removeAttribute('data-theme');
     localStorage.setItem('theme', 'light');
-  } else {
-    html.setAttribute('data-theme', 'dark');
-    localStorage.setItem('theme', 'dark');
   }
   syncThemeButton();
 }

@@ -15,7 +15,7 @@
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}?v={{ static_version }}">
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script>
-      (function(){var t=localStorage.getItem('theme');if(t==='dark'||(!t&&window.matchMedia('(prefers-color-scheme:dark)').matches))document.documentElement.setAttribute('data-theme','dark');})();
+      (function(){var t=localStorage.getItem('theme');if(t&&t!=='light')document.documentElement.setAttribute('data-theme',t);else if(!t&&window.matchMedia('(prefers-color-scheme:dark)').matches)document.documentElement.setAttribute('data-theme','dark');})();
     </script>
 </head>
 <body>
@@ -42,7 +42,7 @@
             <a href="/admin/notifications" class="nav-link" data-link id="adminNotifLink" style="display:none;" title="Digest"><span class="nav-icon">📨</span> <span class="nav-label">Digest</span></a>
         </div>
         <div class="sidebar-footer">
-            <button id="themeToggle" class="nav-link theme-toggle-sidebar" title="Toggle dark mode"><span class="nav-icon">🌙</span> <span class="nav-label">Dark Mode</span></button>
+            <button id="themeToggle" class="nav-link theme-toggle-sidebar" title="Switch theme"><span class="nav-icon">☀️</span> <span class="nav-label">Light</span></button>
             <button class="nav-link nav-logout" id="logoutBtn" title="Logout"><span class="nav-icon">🚪</span> <span class="nav-label">Logout</span></button>
         </div>
     </nav>
