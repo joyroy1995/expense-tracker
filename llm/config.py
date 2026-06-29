@@ -42,7 +42,7 @@ def _get_client():
         return None
     http_client = httpx.Client(verify=False, timeout=LLM_TIMEOUT)
     try:
-        return Groq(api_key=key, timeout=LLM_TIMEOUT, http_client=http_client)
+        return Groq(api_key=key, timeout=LLM_TIMEOUT, http_client=http_client, max_retries=0)
     except Exception as e:
         print(f"[ERROR] Failed to initialize Groq client: {e}", file=sys.stderr)
         return None
