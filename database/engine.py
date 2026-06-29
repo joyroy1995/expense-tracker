@@ -420,6 +420,87 @@ def _run_migrations():
 
     with engine.connect() as conn:
         result = conn.execute(
+            text("SELECT COUNT(*) FROM migrations WHERE name = 'expense_sessions'")
+        )
+        if result.fetchone()[0] == 0:
+            if _is_postgres():
+                conn.execute(text("""
+                    CREATE TABLE IF NOT EXISTS expense_sessions (
+                        id SERIAL PRIMARY KEY,
+                        user_id INTEGER NOT NULL REFERENCES users(id),
+                        reason TEXT NOT NULL,
+                        reason_category TEXT,
+                        icon TEXT DEFAULT '📦',
+                        confidence TEXT DEFAULT 'medium',
+                        total_amount REAL NOT NULL,
+                        start_time TEXT NOT NULL,
+                        end_time TEXT NOT NULL,
+                        expense_ids TEXT NOT NULL,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )
+                """))
+                col_check = conn.execute(
+                    text("SELECT column_name FROM information_schema.columns WHERE table_name = 'expenses' AND column_name = 'session_id'")
+                )
+                if not col_check.fetchone():
+                    conn.execute(
+                        text("ALTER TABLE expenses ADD COLUMN session_id INTEGER")
+                    )
+                col_check2 = conn.execute(
+                    text("SELECT column_name FROM information_schema.columns WHERE table_name = 'expenses' AND column_name = 'reason'")
+                )
+                if not col_check2.fetchone():
+                    conn.execute(
+                        text("ALTER TABLE expenses ADD COLUMN reason TEXT")
+                    )
+                conn.execute(text("""
+                    CREATE INDEX IF NOT EXISTS idx_expenses_session ON expenses(session_id)
+                """))
+                conn.execute(text("""
+                    CREATE INDEX IF NOT EXISTS idx_expense_sessions_user ON expense_sessions(user_id)
+                """))
+            else:
+                conn.execute(text("""
+                    CREATE TABLE IF NOT EXISTS expense_sessions (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        user_id INTEGER NOT NULL,
+                        reason TEXT NOT NULL,
+                        reason_category TEXT,
+                        icon TEXT DEFAULT '📦',
+                        confidence TEXT DEFAULT 'medium',
+                        total_amount REAL NOT NULL,
+                        start_time TEXT NOT NULL,
+                        end_time TEXT NOT NULL,
+                        expense_ids TEXT NOT NULL,
+                        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                        FOREIGN KEY (user_id) REFERENCES users(id)
+                    )
+                """))
+                result2 = conn.execute(text("PRAGMA table_info(expenses)"))
+                cols = [r[1] for r in result2]
+                if "session_id" not in cols:
+                    conn.execute(
+                        text("ALTER TABLE expenses ADD COLUMN session_id INTEGER")
+                    )
+                if "reason" not in cols:
+                    conn.execute(
+                        text("ALTER TABLE expenses ADD COLUMN reason TEXT")
+                    )
+                conn.execute(text("""
+                    CREATE INDEX IF NOT EXISTS idx_expenses_session ON expenses(session_id)
+                """))
+                conn.execute(text("""
+                    CREATE INDEX IF NOT EXISTS idx_expense_sessions_user ON expense_sessions(user_id)
+                """))
+            now = datetime.now(TIMEZONE).strftime("%Y-%m-%d %H:%M:%S")
+            conn.execute(
+                text("INSERT INTO migrations (name, applied_at) VALUES ('expense_sessions', :n)"),
+                {"n": now},
+            )
+            conn.commit()
+
+    with engine.connect() as conn:
+        result = conn.execute(
             text("SELECT COUNT(*) FROM migrations WHERE name = 'qa_cache_features'")
         )
         if result.fetchone()[0] == 0:

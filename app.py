@@ -11,7 +11,7 @@ import calendar
 import json
 import database as db
 from database import _ALL_CATEGORIES
-from llm import extract_expense, predict_expense, extract_keywords, split_expenses, _clean_split_desc, extract_date_reference, clean_date_refs, detect_budget_intent, is_question, transcribe_audio, scan_receipt, generate_forecast
+from llm import extract_expense, predict_expense, extract_keywords, split_expenses, _clean_split_desc, extract_date_reference, clean_date_refs, detect_budget_intent, is_question, transcribe_audio, scan_receipt, generate_forecast, extract_session_reason
 from config import SECRET_KEY, CATEGORY_COLORS, TIMEZONE
 from services.sql_service import SqlService
 from services.qa_service import QaService
@@ -748,6 +748,20 @@ def api_delete_expense(expense_id):
     return jsonify({"success": True})
 
 
+@app.route("/api/expenses/<int:expense_id>/unlink", methods=["POST"])
+@login_required
+def api_unlink_expense_from_session(expense_id):
+    expense = db.get_expense_by_id(expense_id)
+    if not expense:
+        return jsonify({"error": "Expense not found"}), 404
+    uid = session["user_id"]
+    is_super = session.get("role") == "superuser"
+    if not is_super and expense["user_id"] != uid:
+        return jsonify({"error": "Forbidden"}), 403
+    db.unlink_expense_from_session(expense_id)
+    return jsonify({"success": True})
+
+
 @app.route("/api/expenses/<int:expense_id>", methods=["PUT"])
 @login_required
 def api_update_expense(expense_id):
@@ -809,6 +823,202 @@ def api_get_expense(expense_id):
         return jsonify({"error": "Forbidden"}), 403
     expense["color"] = CATEGORY_COLORS.get(expense["category"], "#6b7280")
     return jsonify(expense)
+
+
+# ── Expense Sessions ──
+
+_SESSION_ICONS = {
+    "Food": "🍽️", "Groceries": "🛒", "Transport": "🚗", "Commute": "🚌",
+    "Dining": "🍜", "Dining Out": "🍜", "Shopping": "🛍️", "Bills": "📄",
+    "Entertainment": "🎬", "Health": "💊", "Medical": "💊", "Education": "📚",
+    "Rent": "🏠", "Home": "🏠", "Fruits": "🍎", "Travel": "✈️",
+    "Personal Care": "💇", "Gifts": "🎁", "Investment": "📈",
+    "Savings": "💰", "Social": "🎉", "Errand": "📋", "Work": "💼",
+    "Other": "📦",
+}
+
+
+def _format_single_reason(desc, category, amount):
+    import re
+    # Strip amount and currency from description
+    clean = re.sub(r'\b\d+(?:\.\d+)?\s*(?:taka|tk|৳|টাকা)\b', '', desc, flags=re.IGNORECASE).strip()
+    clean = re.sub(r'\b(?:taka|tk|৳|টাকা)\s*\d+(?:\.\d+)?\b', '', clean, flags=re.IGNORECASE).strip()
+    clean = re.sub(r'\s*\d+(?:\.\d+)?\s*$', '', clean).strip()
+    clean = re.sub(r'\s+', ' ', clean).strip()
+    if not clean:
+        clean = category
+
+    # Map common Bangla/Banglish keywords to readable reasons
+    kw = clean.lower()
+    if category == "Rent" or any(w in kw for w in ("bhara", "ভাড়া", "rent", "basa", "bari", "flat", "house", "apartment", "mess")):
+        return f"Monthly {clean} — ৳{amount:,.0f}"
+    if category == "Bills" or any(w in kw for w in ("bill", "বিল", "electricity", "current", "gas", "water", "internet", "মোবাইল", "phone")):
+        return f"{clean} — ৳{amount:,.0f}"
+    if category in ("Health", "Medical") or any(w in kw for w in ("doctor", "pharmacy", "ওষুধ", "oshudh", "medicine", "hospital", "clinic")):
+        return f"{clean} — ৳{amount:,.0f}"
+    if category in ("Transport", "Commute") or any(w in kw for w in ("rickshaw", "bus", "টেম্পো", "tempo", "উবার", "uber", "পেট্রোল", "petrol", "fuel")):
+        return f"Commute: {clean} — ৳{amount:,.0f}"
+    if category == "Dining Out" or category == "Dining":
+        return f"{clean} — ৳{amount:,.0f}"
+    if category in ("Shopping", "Personal Care"):
+        return f"{clean} — ৳{amount:,.0f}"
+    if category == "Food":
+        return f"{clean} — ৳{amount:,.0f}"
+    if category == "Groceries":
+        return f"{clean} — ৳{amount:,.0f}"
+
+    return f"{clean} — ৳{amount:,.0f}"
+
+@app.route("/api/sessions", methods=["GET"])
+@login_required
+def api_list_sessions():
+    uid = session["user_id"]
+    limit = request.args.get("limit", 20, type=int)
+    sessions = db.get_user_sessions(uid, limit=limit)
+    for s in sessions:
+        s["total_amount"] = round(s["total_amount"], 2)
+    return jsonify({"sessions": sessions})
+
+
+@app.route("/api/sessions/generate", methods=["POST"])
+@login_required
+def api_generate_sessions():
+    uid = session["user_id"]
+    expenses = db.get_recent_unsessioned_expenses(uid, limit=50)
+    if not expenses:
+        return jsonify({"error": "No unsessioned expenses found"}), 400
+
+    # Group by temporal proximity: within 2h windows
+    expenses_sorted = sorted(expenses, key=lambda e: e.get("created_at", ""))
+    groups = []
+    current_group = [expenses_sorted[0]]
+    for exp in expenses_sorted[1:]:
+        t1 = current_group[-1].get("created_at", "")
+        t2 = exp.get("created_at", "")
+        try:
+            dt1 = datetime.strptime(t1, "%Y-%m-%d %H:%M:%S") if t1 else None
+            dt2 = datetime.strptime(t2, "%Y-%m-%d %H:%M:%S") if t2 else None
+            if dt1 and dt2 and (dt2 - dt1).total_seconds() < 7200:
+                current_group.append(exp)
+            else:
+                groups.append(current_group)
+                current_group = [exp]
+        except ValueError:
+            groups.append(current_group)
+            current_group = [exp]
+    if current_group:
+        groups.append(current_group)
+
+    created = []
+    for group in groups:
+        if not group:
+            continue
+        # Single-expense groups: skip unless amount is large (>500)
+        if len(group) == 1 and group[0]["amount"] < 500:
+            continue
+
+        # For single-expense groups, derive reason directly (faster, more accurate)
+        if len(group) == 1:
+            exp = group[0]
+            category = exp.get("category", "Other")
+            desc = exp.get("description", "").strip()
+            amount = exp.get("amount", 0)
+            reason = _format_single_reason(desc, category, amount)
+            result = {
+                "session_reason": reason,
+                "reason_category": category,
+                "icon": _SESSION_ICONS.get(category, "📦"),
+                "expense_ids": [exp["id"]],
+                "total_amount": amount,
+                "start_time": exp.get("created_at", ""),
+                "end_time": exp.get("created_at", ""),
+                "confidence": "high",
+            }
+        else:
+            result = extract_session_reason(group)
+            if not result:
+                continue
+
+        sid = db.create_session(
+            user_id=uid,
+            reason=result["session_reason"],
+            reason_category=result["reason_category"],
+            icon=result["icon"],
+            confidence=result["confidence"],
+            total_amount=result["total_amount"],
+            start_time=result["start_time"],
+            end_time=result["end_time"],
+            expense_ids=result["expense_ids"],
+        )
+        created.append({
+            "id": sid,
+            "reason": result["session_reason"],
+            "icon": result["icon"],
+            "total_amount": result["total_amount"],
+            "count": len(group),
+        })
+
+    return jsonify({"created": len(created), "sessions": created})
+
+
+@app.route("/api/sessions/<int:session_id>", methods=["GET"])
+@login_required
+def api_get_session(session_id):
+    session_data = db.get_session_by_id(session_id)
+    if not session_data:
+        return jsonify({"error": "Session not found"}), 404
+    uid = session["user_id"]
+    if session_data["user_id"] != uid and session.get("role") != "superuser":
+        return jsonify({"error": "Forbidden"}), 403
+    for exp in session_data.get("expenses", []):
+        exp["color"] = CATEGORY_COLORS.get(exp["category"], "#6b7280")
+    session_data["total_amount"] = round(session_data["total_amount"], 2)
+    return jsonify(session_data)
+
+
+@app.route("/api/sessions/<int:session_id>", methods=["PUT"])
+@login_required
+def api_update_session(session_id):
+    session_data = db.get_session_by_id(session_id)
+    if not session_data:
+        return jsonify({"error": "Session not found"}), 404
+    uid = session["user_id"]
+    if session_data["user_id"] != uid and session.get("role") != "superuser":
+        return jsonify({"error": "Forbidden"}), 403
+
+    data = request.get_json()
+    db.update_session(
+        session_id,
+        reason=data.get("reason"),
+        reason_category=data.get("reason_category"),
+        icon=data.get("icon"),
+        confidence=data.get("confidence"),
+    )
+    return jsonify({"success": True})
+
+
+@app.route("/api/sessions/<int:session_id>", methods=["DELETE"])
+@login_required
+def api_delete_session(session_id):
+    session_data = db.get_session_by_id(session_id)
+    if not session_data:
+        return jsonify({"error": "Session not found"}), 404
+    uid = session["user_id"]
+    if session_data["user_id"] != uid and session.get("role") != "superuser":
+        return jsonify({"error": "Forbidden"}), 403
+    db.delete_session(session_id)
+    return jsonify({"success": True, "unlinked": len(session_data.get("expenses", []))})
+
+
+@app.route("/api/sessions/insights")
+@login_required
+def api_session_insights():
+    uid = session["user_id"]
+    now = datetime.now(TIMEZONE)
+    year = request.args.get("year", now.year, type=int)
+    month = request.args.get("month", now.month, type=int)
+    insights = db.get_session_insights(uid, year, month)
+    return jsonify({"insights": insights})
 
 
 @app.route("/api/expenses/<date>")

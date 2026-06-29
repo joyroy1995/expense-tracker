@@ -1,6 +1,8 @@
 // ── State ──
 let currentUser = null;
 let chartInstances = [];
+let homeSessions = [];
+let expandedSessionId = null;
 
 // ── API Client ──
 const FETCH_OPTS = { credentials: 'include' };
@@ -728,11 +730,24 @@ async function renderHome(page = 1) {
         <div id="todayExpenses" class="expense-list">${todayHtml}</div>
       </div>
     </div>
+
+    <div class="card sessions-card" id="sessionsCard">
+      <div class="card-header-row">
+        <h2 class="card-title" style="margin-bottom:0;">📦 Expense Sessions</h2>
+        <div class="card-header-actions" style="display:flex;align-items:center;gap:8px;">
+          <button class="btn btn-outline btn-sm" id="generateSessionsBtn" onclick="generateSessions()">🤖 Generate</button>
+        </div>
+      </div>
+      <div id="sessionsList" class="expense-list">
+        <div class="empty-state"><p>Generate sessions to group expenses by reason.</p></div>
+      </div>
+    </div>
 `;
 
   attachExpenseForm(d.today);
   initChatCard();
   renderChatMessages();
+  loadSessions();
 }
 
 function renderBudgetAlerts(alerts) {
@@ -1112,6 +1127,183 @@ function updateTodayTotal(amount) {
   const cntEl = document.querySelector('.stats-grid .stat-card:last-child .stat-value');
   if (cntEl) cntEl.textContent = parseInt(cntEl.textContent) + 1;
 }
+
+// ── Session Helpers ──
+
+async function loadSessions() {
+  const res = await api.get('/api/sessions?limit=10');
+  if (!res.ok) return;
+  homeSessions = res.data.sessions || [];
+  renderSessions();
+}
+
+async function generateSessions() {
+  const btn = document.getElementById('generateSessionsBtn');
+  if (!btn) return;
+  const orig = btn.innerHTML;
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> Generating...';
+  const res = await api.post('/api/sessions/generate', {});
+  btn.disabled = false;
+  btn.innerHTML = orig;
+  if (!res.ok) { showToast(res.error || 'Could not generate sessions', 'error'); return; }
+  showToast(`Generated ${res.data.created} session(s)`, 'success');
+  await loadSessions();
+}
+
+function renderSessions() {
+  const container = document.getElementById('sessionsList');
+  if (!container) return;
+  if (!homeSessions.length) {
+    container.innerHTML = '<div class="empty-state"><p>No sessions yet. Generate to group expenses by reason.</p></div>';
+    return;
+  }
+  container.innerHTML = homeSessions.map(s => `
+    <div class="session-card ${expandedSessionId === s.id ? 'expanded' : ''}" data-session-id="${s.id}">
+      <div class="session-header" onclick="toggleSession(${s.id})">
+        <div class="session-info">
+          <span class="session-icon">${s.icon || '📦'}</span>
+          <div class="session-details">
+            <div class="session-reason">${esc(s.reason)}</div>
+            <div class="session-meta">
+              <span class="session-confidence session-conf-${s.confidence}">${s.confidence}</span>
+              <span class="session-items">${(s.expense_ids || []).length} item(s)</span>
+            </div>
+          </div>
+        </div>
+        <div class="session-total">
+          <span class="session-amount">৳${Number(s.total_amount || 0).toFixed(2)}</span>
+          <span class="session-expand-icon">${expandedSessionId === s.id ? '▼' : '▶'}</span>
+        </div>
+      </div>
+      <div class="session-body" id="sessionBody${s.id}" style="display:${expandedSessionId === s.id ? 'block' : 'none'}">
+        <div class="session-loader"><span class="spinner"></span> Loading...</div>
+      </div>
+    </div>
+  `).join('');
+  // Load expanded session data if any
+  if (expandedSessionId !== null) {
+    loadSessionExpenses(expandedSessionId);
+  }
+}
+
+async function toggleSession(id) {
+  if (expandedSessionId === id) {
+    expandedSessionId = null;
+    renderSessions();
+    return;
+  }
+  expandedSessionId = id;
+  renderSessions();
+}
+
+async function loadSessionExpenses(id) {
+  const body = document.getElementById(`sessionBody${id}`);
+  if (!body) return;
+  const res = await api.get(`/api/sessions/${id}`);
+  if (!res.ok) { body.innerHTML = '<div class="empty-state">Failed to load</div>'; return; }
+  const s = res.data;
+  const expenses = s.expenses || [];
+  const expHtml = expenses.length
+    ? expenses.map(e => `
+      <div class="expense-item" data-id="${e.id}">
+        <div class="expense-info">
+          <div class="expense-description">${esc(e.description)}</div>
+          <span class="category-badge" style="background-color: ${e.color || '#6b7280'}">${esc(e.category)}</span>
+        </div>
+        <div class="expense-actions">
+          <span class="expense-amount">৳${Number(e.amount).toFixed(2)}</span>
+          <button class="btn-unlink" onclick="unlinkExpense(${e.id})" title="Remove from session">✕</button>
+          <button class="btn-edit" onclick="editExpense(${e.id})" title="Edit">✎</button>
+          <button class="btn-delete" onclick="deleteExpense(${e.id})">&times;</button>
+        </div>
+      </div>
+    `).join('')
+    : '<div class="empty-state"><p>No expenses</p></div>';
+  body.innerHTML = `
+    <div class="session-body-inner">
+      <div class="session-actions">
+        <span class="session-reason-badge">${esc(s.reason_category || '')}</span>
+        <button class="btn btn-outline btn-sm" onclick="editSession(${s.id})">✏️ Edit Reason</button>
+        <button class="btn btn-danger btn-sm" onclick="deleteSession(${s.id})">🗑 Delete</button>
+      </div>
+      <div class="session-expenses">${expHtml}</div>
+    </div>`;
+}
+
+async function unlinkExpense(id) {
+  if (!confirm('Remove this expense from the session?')) return;
+  const res = await api.post(`/api/expenses/${id}/unlink`, {});
+  if (!res.ok) { showToast(res.error || 'Failed to unlink', 'error'); return; }
+  showToast('Expense removed from session', 'success');
+  if (expandedSessionId !== null) loadSessionExpenses(expandedSessionId);
+}
+
+async function editSession(id) {
+  const res = await api.get(`/api/sessions/${id}`);
+  if (!res.ok) { showToast(res.error, 'error'); return; }
+  const s = res.data;
+
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.innerHTML = `
+    <div class="modal">
+      <div class="modal-header">
+        <h2>✏️ Edit Session</h2>
+        <button class="modal-close" id="editSessClose">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="modal-field">
+          <label for="editSessReason">Reason</label>
+          <input type="text" id="editSessReason" value="${esc(s.reason)}">
+        </div>
+        <div class="modal-field">
+          <label for="editSessCategory">Reason Category</label>
+          <select id="editSessCategory">
+            ${['Groceries','Commute','Dining','Social','Medical','Shopping','Bills','Entertainment','Travel','Home','Errand','Work','Other'].map(c =>
+              `<option value="${c}" ${c === s.reason_category ? 'selected' : ''}>${c}</option>`
+            ).join('')}
+          </select>
+        </div>
+        <div class="modal-field">
+          <label for="editSessIcon">Icon (emoji)</label>
+          <input type="text" id="editSessIcon" value="${s.icon || '📦'}" maxlength="2">
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-outline" id="editSessCancel">Cancel</button>
+        <button class="btn btn-primary" id="editSessSave">Save</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+
+  function closeSessEdit() { overlay.remove(); }
+  document.getElementById('editSessClose').addEventListener('click', closeSessEdit);
+  document.getElementById('editSessCancel').addEventListener('click', closeSessEdit);
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) closeSessEdit(); });
+
+  document.getElementById('editSessSave').addEventListener('click', async () => {
+    const reason = document.getElementById('editSessReason').value.trim();
+    const rcat = document.getElementById('editSessCategory').value;
+    const icon = document.getElementById('editSessIcon').value.trim();
+    if (!reason) { showToast('Reason required', 'error'); return; }
+    const saveRes = await api.put(`/api/sessions/${id}`, { reason, reason_category: rcat, icon });
+    if (!saveRes.ok) { showToast(saveRes.error, 'error'); return; }
+    showToast('Session updated', 'success');
+    closeSessEdit();
+    await loadSessions();
+  });
+}
+
+async function deleteSession(id) {
+  if (!confirm('Delete this session? Expenses will be unlinked but not deleted.')) return;
+  const res = await api.del(`/api/sessions/${id}`);
+  if (!res.ok) { showToast(res.error, 'error'); return; }
+  showToast('Session deleted', 'success');
+  if (expandedSessionId === id) expandedSessionId = null;
+  await loadSessions();
+}
+
 
 // ── Dashboard ──
 let expandedCategory = null;

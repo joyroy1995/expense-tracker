@@ -3762,6 +3762,191 @@ select option {
     transform: translateX(18px);
 }
 
+/* ── Expense Sessions ── */
+
+.session-card {
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    margin-bottom: 8px;
+    overflow: hidden;
+    transition: border-color 0.2s;
+}
+
+.session-card.expanded {
+    border-color: var(--primary);
+}
+
+.session-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 14px;
+    cursor: pointer;
+    background: var(--card-bg);
+    transition: background 0.15s;
+    user-select: none;
+}
+
+.session-header:hover {
+    background: var(--primary-light);
+}
+
+.session-info {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+    flex: 1;
+}
+
+.session-icon {
+    font-size: 1.4rem;
+    line-height: 1;
+    flex-shrink: 0;
+}
+
+.session-details {
+    min-width: 0;
+    flex: 1;
+}
+
+.session-reason {
+    font-weight: 600;
+    font-size: 0.9rem;
+    color: var(--text);
+    display: -webkit-box;
+    -webkit-line-clamp: 1;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    word-break: break-word;
+    line-height: 1.3;
+}
+
+@media (max-width: 480px) {
+    .session-reason {
+        font-size: 0.82rem;
+        -webkit-line-clamp: 2;
+    }
+    .session-header {
+        padding: 8px 10px;
+    }
+    .session-icon {
+        font-size: 1.2rem;
+    }
+    .session-amount {
+        font-size: 0.85rem;
+    }
+    .session-total {
+        margin-left: 8px;
+    }
+    .session-body-inner {
+        padding: 8px 10px;
+    }
+}
+
+.session-meta {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 2px;
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+}
+
+.session-confidence {
+    display: inline-block;
+    padding: 1px 6px;
+    border-radius: 4px;
+    font-size: 0.7rem;
+    font-weight: 600;
+    text-transform: uppercase;
+}
+
+.session-conf-high {
+    background: #22c55e20;
+    color: #22c55e;
+}
+
+.session-conf-medium {
+    background: #f59e0b20;
+    color: #f59e0b;
+}
+
+.session-conf-low {
+    background: #ef444420;
+    color: #ef4444;
+}
+
+.session-items {
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+}
+
+.session-total {
+    text-align: right;
+    flex-shrink: 0;
+    margin-left: 12px;
+}
+
+.session-amount {
+    font-weight: 700;
+    font-size: 0.95rem;
+    color: var(--text);
+    display: block;
+}
+
+.session-expand-icon {
+    font-size: 0.7rem;
+    color: var(--text-secondary);
+    display: block;
+    margin-top: 2px;
+}
+
+.session-body {
+    border-top: 1px solid var(--border);
+    background: var(--bg);
+}
+
+.session-loader {
+    padding: 20px;
+    text-align: center;
+    color: var(--text-secondary);
+}
+
+.session-body-inner {
+    padding: 12px 14px;
+}
+
+.session-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 10px;
+    flex-wrap: wrap;
+}
+
+.session-reason-badge {
+    display: inline-block;
+    padding: 2px 10px;
+    border-radius: 12px;
+    background: var(--primary-light);
+    color: var(--primary);
+    font-size: 0.75rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+}
+
+.session-expenses {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.sessions-card .empty-state {
+    padding: 12px 0;
+}
+
 @media (max-width: 768px) {
     .cal-grid {
         gap: 1px;

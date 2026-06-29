@@ -1,3 +1,4 @@
+import json
 from datetime import datetime
 from sqlalchemy import text
 from config import TIMEZONE
@@ -344,3 +345,169 @@ def delete_expense(expense_id):
     )
     conn.commit()
     bump_data_version()
+
+
+# ── Expense Sessions ──
+
+def get_recent_unsessioned_expenses(user_id, limit=50):
+    conn = get_connection()
+    result = conn.execute(
+        text("""
+            SELECT * FROM expenses
+            WHERE user_id = :uid AND session_id IS NULL
+            ORDER BY created_at DESC
+            LIMIT :lim
+        """),
+        {"uid": user_id, "lim": limit},
+    )
+    return [dict(row._mapping) for row in result]
+
+
+def create_session(user_id, reason, reason_category, icon, confidence, total_amount, start_time, end_time, expense_ids):
+    conn = get_connection()
+    now = datetime.now(TIMEZONE).strftime("%Y-%m-%d %H:%M:%S")
+    ids_json = json.dumps(expense_ids)
+    result = conn.execute(
+        text("""
+            INSERT INTO expense_sessions (user_id, reason, reason_category, icon, confidence, total_amount, start_time, end_time, expense_ids, created_at)
+            VALUES (:uid, :reason, :rcat, :icon, :conf, :total, :st, :et, :eids, :ca)
+        """),
+        {
+            "uid": user_id, "reason": reason, "rcat": reason_category,
+            "icon": icon, "conf": confidence, "total": total_amount,
+            "st": start_time, "et": end_time, "eids": ids_json, "ca": now,
+        },
+    )
+    if _is_postgres():
+        result = conn.execute(text("SELECT LASTVAL()"))
+        session_id = result.fetchone()[0]
+    else:
+        session_id = result.lastrowid
+    # Link expenses to this session
+    for eid in expense_ids:
+        conn.execute(
+            text("UPDATE expenses SET session_id = :sid, reason = :r WHERE id = :eid"),
+            {"sid": session_id, "r": reason, "eid": eid},
+        )
+    conn.commit()
+    bump_data_version()
+    return session_id
+
+
+def get_user_sessions(user_id, limit=20):
+    conn = get_connection()
+    result = conn.execute(
+        text("""
+            SELECT * FROM expense_sessions
+            WHERE user_id = :uid
+            ORDER BY created_at DESC
+            LIMIT :lim
+        """),
+        {"uid": user_id, "lim": limit},
+    )
+    sessions = []
+    for row in result:
+        s = dict(row._mapping)
+        s["expense_ids"] = json.loads(s["expense_ids"])
+        sessions.append(s)
+    return sessions
+
+
+def get_session_by_id(session_id):
+    conn = get_connection()
+    result = conn.execute(
+        text("SELECT * FROM expense_sessions WHERE id = :sid"),
+        {"sid": session_id},
+    )
+    row = result.fetchone()
+    if not row:
+        return None
+    s = dict(row._mapping)
+    s["expense_ids"] = json.loads(s["expense_ids"])
+    expenses_result = conn.execute(
+        text("SELECT * FROM expenses WHERE session_id = :sid ORDER BY created_at ASC"),
+        {"sid": session_id},
+    )
+    s["expenses"] = [dict(r._mapping) for r in expenses_result]
+    return s
+
+
+def update_session(session_id, **kwargs):
+    allowed = {"reason", "reason_category", "icon", "confidence"}
+    updates = {k: v for k, v in kwargs.items() if k in allowed and v is not None}
+    if not updates:
+        return False
+    conn = get_connection()
+    set_clause = ", ".join(f"{k} = :{k}" for k in updates)
+    updates["id"] = session_id
+    conn.execute(
+        text(f"UPDATE expense_sessions SET {set_clause} WHERE id = :id"),
+        updates,
+    )
+    if "reason" in updates:
+        for row in conn.execute(
+            text("SELECT id FROM expenses WHERE session_id = :sid"), {"sid": session_id}
+        ):
+            conn.execute(
+                text("UPDATE expenses SET reason = :r WHERE id = :eid"),
+                {"r": updates["reason"], "eid": row[0]},
+            )
+    conn.commit()
+    bump_data_version()
+    return True
+
+
+def delete_session(session_id):
+    conn = get_connection()
+    conn.execute(
+        text("UPDATE expenses SET session_id = NULL, reason = NULL WHERE session_id = :sid"),
+        {"sid": session_id},
+    )
+    conn.execute(
+        text("DELETE FROM expense_sessions WHERE id = :sid"),
+        {"sid": session_id},
+    )
+    conn.commit()
+    bump_data_version()
+    return True
+
+
+def unlink_expense_from_session(expense_id):
+    conn = get_connection()
+    conn.execute(
+        text("UPDATE expenses SET session_id = NULL, reason = NULL WHERE id = :eid"),
+        {"eid": expense_id},
+    )
+    conn.commit()
+    bump_data_version()
+    return True
+
+
+def get_session_insights(user_id, year, month):
+    conn = get_connection()
+    month_pattern = f"{year}-{month:02d}%"
+    result = conn.execute(
+        text("""
+            SELECT reason_category, icon, SUM(total_amount) as total, COUNT(*) as count
+            FROM expense_sessions
+            WHERE user_id = :uid AND start_time LIKE :pattern
+            GROUP BY reason_category, icon
+            ORDER BY total DESC
+        """),
+        {"uid": user_id, "pattern": month_pattern},
+    )
+    return [dict(row._mapping) for row in result]
+
+
+def get_unsessioned_created_at_range(user_id):
+    conn = get_connection()
+    result = conn.execute(
+        text("""
+            SELECT MIN(created_at) as min_ts, MAX(created_at) as max_ts
+            FROM expenses
+            WHERE user_id = :uid AND session_id IS NULL
+        """),
+        {"uid": user_id},
+    )
+    row = result.fetchone()
+    return dict(row._mapping) if row else {"min_ts": None, "max_ts": None}
