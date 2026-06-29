@@ -34,6 +34,7 @@ from database.expenses import (
     get_daily_totals,
     get_distinct_categories,
     get_distinct_years,
+    get_expense_by_id,
     get_expenses_by_category_month,
     get_expenses_by_date,
     get_expenses_by_month,
@@ -43,6 +44,7 @@ from database.expenses import (
     get_monthly_totals,
     get_today_total,
     get_week_total,
+    update_expense,
 )
 from database.budgets import (
     OVERALL_BUDGET_CATEGORY,
@@ -128,6 +130,7 @@ __all__ = [
     "get_daily_totals",
     "get_distinct_categories",
     "get_distinct_years",
+    "get_expense_by_id",
     "get_due_recurring",
     "get_expenses_by_category_month",
     "get_expenses_by_date",
@@ -157,6 +160,7 @@ __all__ = [
     "set_budget",
     "set_user_last_digest_sent",
     "text",
+    "update_expense",
     "update_next_date",
     "update_recurring",
     "update_user_role",

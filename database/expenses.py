@@ -311,6 +311,32 @@ def get_distinct_years(user_id=None):
     return [int(row[0]) for row in result]
 
 
+def update_expense(expense_id, **kwargs):
+    allowed = {"date", "description", "amount", "category"}
+    updates = {k: v for k, v in kwargs.items() if k in allowed and v is not None}
+    if not updates:
+        return False
+    conn = get_connection()
+    set_clause = ", ".join(f"{k} = :{k}" for k in updates)
+    updates["id"] = expense_id
+    conn.execute(
+        text(f"UPDATE expenses SET {set_clause} WHERE id = :id"),
+        updates,
+    )
+    conn.commit()
+    bump_data_version()
+    return True
+
+
+def get_expense_by_id(expense_id):
+    conn = get_connection()
+    result = conn.execute(
+        text("SELECT * FROM expenses WHERE id = :id"), {"id": expense_id}
+    )
+    row = result.fetchone()
+    return dict(row._mapping) if row else None
+
+
 def delete_expense(expense_id):
     conn = get_connection()
     conn.execute(

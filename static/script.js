@@ -250,6 +250,7 @@ function makeExpenseItem(exp) {
       </div>
       <div class="expense-actions">
         <span class="expense-amount">৳${Number(exp.amount).toFixed(2)}</span>
+        <button class="btn-edit" onclick="editExpense(${exp.id})" title="Edit">✎</button>
         <button class="btn-delete" onclick="deleteExpense(${exp.id})">&times;</button>
       </div>
     </div>`;
@@ -309,6 +310,103 @@ async function deleteExpense(id) {
     }
   }
 }
+
+// ── Edit Expense ──
+
+async function editExpense(id) {
+  const res = await api.get(`/api/expenses/${id}`);
+  if (!res.ok) {
+    if (res.error === 'Unauthorized') { handleAuthError(res); return; }
+    showToast(res.error || 'Could not load expense', 'error');
+    return;
+  }
+
+  const exp = res.data;
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.id = 'editModalOverlay';
+  overlay.innerHTML = `
+    <div class="modal" id="editModal">
+      <div class="modal-header">
+        <h2>✏️ Edit Expense</h2>
+        <button class="modal-close" id="editModalClose">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="modal-field">
+          <label for="editDate">Date</label>
+          <input type="date" id="editDate" value="${esc(exp.date)}">
+        </div>
+        <div class="modal-field">
+          <label for="editDescription">Description</label>
+          <input type="text" id="editDescription" value="${esc(exp.description)}" autocomplete="off">
+        </div>
+        <div class="modal-field">
+          <label for="editAmount">Amount (৳)</label>
+          <input type="number" id="editAmount" step="0.01" min="0" value="${Number(exp.amount).toFixed(2)}">
+        </div>
+        <div class="modal-field">
+          <label for="editCategory">Category</label>
+          <select id="editCategory">${buildCategoryOptions(exp.category)}</select>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-outline" id="editCancelBtn">Cancel</button>
+        <button class="btn btn-primary" id="editSaveBtn">Save Changes</button>
+      </div>
+    </div>`;
+
+  document.body.appendChild(overlay);
+
+  function closeModal() {
+    overlay.remove();
+  }
+
+  document.getElementById('editModalClose').addEventListener('click', closeModal);
+  document.getElementById('editCancelBtn').addEventListener('click', closeModal);
+  overlay.addEventListener('click', (e) => {
+    if (e.target === overlay) closeModal();
+  });
+
+  document.getElementById('editSaveBtn').addEventListener('click', async () => {
+    const btn = document.getElementById('editSaveBtn');
+    const origText = btn.textContent;
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner"></span> Saving...';
+
+    const date = document.getElementById('editDate').value;
+    const description = document.getElementById('editDescription').value.trim();
+    const amount = parseFloat(document.getElementById('editAmount').value);
+    const category = document.getElementById('editCategory').value;
+
+    if (!description) { showToast('Description required', 'error'); btn.disabled = false; btn.textContent = origText; return; }
+    if (!amount || amount <= 0) { showToast('Amount must be positive', 'error'); btn.disabled = false; btn.textContent = origText; return; }
+
+    const saveRes = await api.put(`/api/expenses/${id}`, { date, description, amount, category });
+    btn.disabled = false;
+    btn.textContent = origText;
+
+    if (!saveRes.ok) { showToast(saveRes.error || 'Failed to update', 'error'); return; }
+
+    showToast('Expense updated', 'success');
+    showBudgetToastAlerts(saveRes.data.budget_alerts);
+    closeModal();
+
+    // Update the expense item in-place
+    const el = document.querySelector(`.expense-item[data-id="${id}"]`);
+    if (el) {
+      el.querySelector('.expense-description').textContent = saveRes.data.description;
+      el.querySelector('.expense-amount').textContent = `৳${Number(saveRes.data.amount).toFixed(2)}`;
+      const badge = el.querySelector('.category-badge');
+      badge.textContent = saveRes.data.category;
+      badge.style.backgroundColor = saveRes.data.color;
+    }
+  });
+
+  document.addEventListener('keydown', function escHandler(e) {
+    if (e.key === 'Escape') { closeModal(); document.removeEventListener('keydown', escHandler); }
+  });
+}
+
 
 // ── Views ──
 

@@ -748,6 +748,69 @@ def api_delete_expense(expense_id):
     return jsonify({"success": True})
 
 
+@app.route("/api/expenses/<int:expense_id>", methods=["PUT"])
+@login_required
+def api_update_expense(expense_id):
+    expense = db.get_expense_by_id(expense_id)
+    if not expense:
+        return jsonify({"error": "Expense not found"}), 404
+
+    uid = session["user_id"]
+    is_super = session.get("role") == "superuser"
+    if not is_super and expense["user_id"] != uid:
+        return jsonify({"error": "Forbidden"}), 403
+
+    data = request.get_json()
+    description = data.get("description", "").strip()
+    amount = data.get("amount")
+    category = data.get("category", "").strip()
+    date = data.get("date", "").strip()
+
+    if not description:
+        return jsonify({"error": "Description required"}), 400
+    if amount is not None and (not isinstance(amount, (int, float)) or float(amount) <= 0):
+        return jsonify({"error": "Amount must be positive"}), 400
+    if category and category not in CATEGORY_COLORS:
+        return jsonify({"error": "Invalid category"}), 400
+    if date and not date.strip():
+        return jsonify({"error": "Invalid date"}), 400
+
+    db.update_expense(
+        expense_id,
+        description=description,
+        amount=float(amount) if amount is not None else None,
+        category=category if category else None,
+        date=date if date else None,
+    )
+
+    updated = db.get_expense_by_id(expense_id)
+    updated["color"] = CATEGORY_COLORS.get(updated["category"], "#6b7280")
+
+    budget_alerts = []
+    if updated["user_id"] == uid:
+        status = db.get_budget_status(uid)
+        budget_alerts = [b for b in status if b["percentage"] >= 80]
+
+    return jsonify({
+        **updated,
+        "budget_alerts": budget_alerts,
+    })
+
+
+@app.route("/api/expenses/<int:expense_id>", methods=["GET"])
+@login_required
+def api_get_expense(expense_id):
+    expense = db.get_expense_by_id(expense_id)
+    if not expense:
+        return jsonify({"error": "Expense not found"}), 404
+    uid = session["user_id"]
+    is_super = session.get("role") == "superuser"
+    if not is_super and expense["user_id"] != uid:
+        return jsonify({"error": "Forbidden"}), 403
+    expense["color"] = CATEGORY_COLORS.get(expense["category"], "#6b7280")
+    return jsonify(expense)
+
+
 @app.route("/api/expenses/<date>")
 @login_required
 def api_expenses_by_date(date):
