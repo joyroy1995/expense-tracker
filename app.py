@@ -896,8 +896,8 @@ def api_generate_sessions():
         t1 = current_group[-1].get("created_at", "")
         t2 = exp.get("created_at", "")
         try:
-            dt1 = datetime.strptime(t1, "%Y-%m-%d %H:%M:%S") if t1 else None
-            dt2 = datetime.strptime(t2, "%Y-%m-%d %H:%M:%S") if t2 else None
+            dt1 = t1 if isinstance(t1, datetime) else datetime.strptime(t1, "%Y-%m-%d %H:%M:%S") if t1 else None
+            dt2 = t2 if isinstance(t2, datetime) else datetime.strptime(t2, "%Y-%m-%d %H:%M:%S") if t2 else None
             if dt1 and dt2 and (dt2 - dt1).total_seconds() < 7200:
                 current_group.append(exp)
             else:
