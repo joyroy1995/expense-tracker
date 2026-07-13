@@ -183,22 +183,22 @@ class QaService:
         from_pattern = False
 
         t = _time.time()
-        pattern_result = _pattern_engine.match(question)
+        # pattern_result = _pattern_engine.match(question)
         trace["pattern_engine"] = round((_time.time() - t) * 1000, 1)
-        if pattern_result:
-            sql = pattern_result[0]
-            from_pattern = True
-            trace["source"] = "pattern"
-        else:
-            t = _time.time()
-            try:
-                sql = generate_sql(question_with_context, schema, history=history)
-            except Exception as e:
-                return {"error": f"LLM query failed: {str(e)}", "trace": trace}
-            trace["llm_gen"] = round((_time.time() - t) * 1000, 1)
-            if not sql:
-                return {"error": "Could not generate SQL query. Check API key.", "trace": trace}
-            trace["source"] = "llm"
+        # if pattern_result:
+        #     sql = pattern_result[0]
+        #     from_pattern = True
+        #     trace["source"] = "pattern"
+        # else:
+        t = _time.time()
+        try:
+            sql = generate_sql(question_with_context, schema, history=history)
+        except Exception as e:
+            return {"error": f"LLM query failed: {str(e)}", "trace": trace}
+        trace["llm_gen"] = round((_time.time() - t) * 1000, 1)
+        if not sql:
+            return {"error": "Could not generate SQL query. Check API key.", "trace": trace}
+        trace["source"] = "llm"
 
         t = _time.time()
         if not SqlService.validate_sql(sql):
