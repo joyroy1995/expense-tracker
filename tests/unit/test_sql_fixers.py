@@ -465,10 +465,12 @@ class TestFixDescriptionFilter:
         result = _fix_description_filter(sql, "how much on rice")
         assert result == sql
 
-    def test_skips_if_has_category_filter(self):
+    def test_adds_description_filter_even_with_category_filter(self):
         sql = "SELECT * FROM expenses WHERE user_id = :uid AND category = 'Food'"
         result = _fix_description_filter(sql, "how much on rice")
-        assert result == sql
+        assert "LOWER(description) LIKE" in result
+        assert "rice" in result
+        assert "category = 'Food'" in result
 
     def test_skips_if_keyword_is_category(self):
         sql = "SELECT * FROM expenses WHERE user_id = :uid"
@@ -581,3 +583,66 @@ class TestNeedsLlmAnswer:
 
     def test_how_am_i_doing(self):
         assert _needs_llm_answer("how am i doing") is True
+
+
+# ── Pattern Engine: item keyword detection ─────────────────
+
+from services.pattern_engine import PatternEngine
+
+_engine = PatternEngine()
+
+
+class TestPatternEngineItemKeywords:
+    def test_show_fish_expenses_this_month(self):
+        result = _engine.match("show me the list of fish expenses this month")
+        assert result is not None
+        sql, _ = result
+        assert "LOWER(description) LIKE '%fish%'" in sql
+        assert "date LIKE" in sql
+
+    def test_show_rickshaw_expenses_today(self):
+        result = _engine.match("show rickshaw expenses today")
+        assert result is not None
+        sql, _ = result
+        assert "LOWER(description) LIKE '%rickshaw%'" in sql
+
+    def test_how_much_on_petrol_this_month(self):
+        result = _engine.match("how much on petrol this month")
+        assert result is not None
+        sql, _ = result
+        assert "LOWER(description) LIKE '%petrol%'" in sql
+        assert "SUM(amount)" in sql
+
+    def test_top_3_rice_expenses(self):
+        result = _engine.match("top 3 rice expenses this month")
+        assert result is not None
+        sql, _ = result
+        assert "LOWER(description) LIKE '%rice%'" in sql
+        assert "LIMIT 3" in sql
+
+    def test_most_expensive_fish_expense(self):
+        result = _engine.match("most expensive fish expense this month")
+        assert result is not None
+        sql, _ = result
+        assert "LOWER(description) LIKE '%fish%'" in sql
+        assert "ORDER BY amount DESC LIMIT 1" in sql
+
+    def test_category_name_not_added_as_description_filter(self):
+        result = _engine.match("show me food expenses this month")
+        assert result is not None
+        sql, _ = result
+        assert "description LIKE" not in sql.lower()
+        assert "category = 'Food'" in sql
+
+    def test_no_item_keyword_no_description_filter(self):
+        result = _engine.match("show expenses this month")
+        assert result is not None
+        sql, _ = result
+        assert "description LIKE" not in sql.lower()
+
+    def test_fish_total_this_month(self):
+        result = _engine.match("how much did I spend on fish this month")
+        assert result is not None
+        sql, _ = result
+        assert "LOWER(description) LIKE '%fish%'" in sql
+        assert "SUM(amount)" in sql

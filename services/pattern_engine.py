@@ -33,13 +33,14 @@ _SKIP_WORDS = frozenset({
     "all", "my", "your", "the", "this", "that", "these", "those", "show",
     "list", "get", "give", "find", "see", "view", "display", "print",
     "any", "some", "every", "each", "total", "month", "day", "week", "year",
-    "biggest", "largest", "smallest", "cheapest", "most", "least",
+    "date", "biggest", "largest", "smallest", "cheapest", "most", "least",
     "highest", "lowest", "best", "worst", "recent", "last", "first",
     "previous", "next", "top", "bottom",
     "today", "todays", "tonight", "yesterday", "yesterdays",
     "how", "what", "why", "when", "where", "which",
     "much", "many", "often", "did", "does", "do", "is", "are", "was",
     "were", "can", "could", "would", "will", "shall",
+    "expensive", "costly", "pricey",
 })
 
 
@@ -139,13 +140,15 @@ class PatternEngine:
             r'\b(?:bought|buy|purchase|purchased|get|got)\s+(?:a\s+|an\s+|the\s+|some\s+)?(\w+(?:\s+\w+)?)',
             r'\b(?:spent|spend)\s+on\s+(?:a\s+|an\s+|the\s+)?(\w+(?:\s+\w+)?)',
             r'\bhow\s+much\s+(?:on|for)\s+(?:a\s+|an\s+|the\s+)?(\w+(?:\s+\w+)?)',
-            r'(\w+(?:\s+\w+)?)\s+expenses',
+            r'(\w+(?:\s+\w+)?)\s+expenses?',
         ]:
             m = re.search(pattern, q_lower)
             if m:
                 phrase = m.group(1).strip().lower()
                 parts = phrase.split()
-                if parts and parts[0] not in _SKIP_WORDS and parts[0] not in self._CAT_SET:
+                while parts and parts[0] in _SKIP_WORDS:
+                    parts.pop(0)
+                if parts and parts[0] not in self._CAT_SET:
                     valid = [parts[0]]
                     for p in parts[1:]:
                         if p in _SKIP_WORDS or p in self._CAT_SET:
@@ -193,6 +196,9 @@ class PatternEngine:
         if re.search(r'\b(?:nothing|no\s+spending|zero|no\s+expense|without)\b', q_lower):
             return None
         where = self._where_clause(time_info, category)
+        keyword = self._detect_item_keyword(q_lower)
+        if keyword and keyword not in self._CAT_SET:
+            where = self._description_where_clause(keyword, where)
         sql = f"SELECT COALESCE(SUM(amount), 0) as total, COUNT(*) as count FROM expenses WHERE {where}"
         return (sql, "how_much_category")
 
@@ -223,6 +229,9 @@ class PatternEngine:
         if re.search(r'\b(?:nothing|no\s+spending|zero|no\s+expense|without)\b', q_lower):
             return None
         where = self._where_clause(time_info)
+        keyword = self._detect_item_keyword(q_lower)
+        if keyword and keyword not in self._CAT_SET:
+            where = self._description_where_clause(keyword, where)
         sql = f"SELECT COALESCE(SUM(amount), 0) as total, COUNT(*) as count FROM expenses WHERE {where}"
         return (sql, "how_much_total")
 
@@ -236,6 +245,9 @@ class PatternEngine:
         if not time_info or not time_info["clause"]:
             return None
         where = self._where_clause(time_info)
+        keyword = self._detect_item_keyword(q_lower)
+        if keyword and keyword not in self._CAT_SET:
+            where = self._description_where_clause(keyword, where)
         sql = f"SELECT date, description, amount, category FROM expenses WHERE {where} ORDER BY date DESC LIMIT 50"
         return (sql, "show_expenses")
 
@@ -251,6 +263,9 @@ class PatternEngine:
         if not time_info or not time_info["clause"]:
             return None
         where = self._where_clause(time_info, category)
+        keyword = self._detect_item_keyword(q_lower)
+        if keyword and keyword not in self._CAT_SET:
+            where = self._description_where_clause(keyword, where)
         sql = f"SELECT date, description, amount, category FROM expenses WHERE {where} ORDER BY date DESC LIMIT 50"
         return (sql, "show_expenses_by_category")
 
@@ -271,6 +286,9 @@ class PatternEngine:
         if n < 1 or n > 100:
             return None
         where = self._where_clause(time_info, category)
+        keyword = self._detect_item_keyword(q_lower)
+        if keyword and keyword not in self._CAT_SET:
+            where = self._description_where_clause(keyword, where)
         sql = f"SELECT date, description, amount, category FROM expenses WHERE {where} ORDER BY amount DESC LIMIT {n}"
         return (sql, "top_n")
 
@@ -280,6 +298,9 @@ class PatternEngine:
         if re.search(r'\b(top|first)\s+\d+\b', q_lower):
             return None
         where = self._where_clause(time_info, category)
+        keyword = self._detect_item_keyword(q_lower)
+        if keyword and keyword not in self._CAT_SET:
+            where = self._description_where_clause(keyword, where)
         sql = f"SELECT date, description, amount, category FROM expenses WHERE {where} ORDER BY amount DESC LIMIT 1"
         return (sql, "most_expensive")
 
@@ -527,6 +548,9 @@ class PatternEngine:
         if self._has_aggregate_intent(q_lower):
             return None
         where = self._where_clause(time_info, category)
+        keyword = self._detect_item_keyword(q_lower)
+        if keyword and keyword not in self._CAT_SET:
+            where = self._description_where_clause(keyword, where)
         sql = f"SELECT date, description, amount, category FROM expenses WHERE {where} ORDER BY date DESC, id DESC LIMIT 1"
         return (sql, "most_recent")
 

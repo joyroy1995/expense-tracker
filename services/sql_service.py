@@ -351,7 +351,7 @@ class SqlService:
             r'\b(?:bought|buy|purchase|purchased|get|got)\s+(?:a\s+|an\s+|the\s+|some\s+)?(\w+(?:\s+\w+)?)',
             r'\b(?:spent|spend)\s+on\s+(?:a\s+|an\s+|the\s+)?(\w+(?:\s+\w+)?)',
             r'\bhow\s+much\s+(?:on|for)\s+(?:a\s+|an\s+|the\s+)?(\w+(?:\s+\w+)?)',
-            r'(\w+(?:\s+\w+)?)\s+expenses',
+            r'(\w+(?:\s+\w+)?)\s+expenses?',
         ]:
             m = re.search(pattern, q)
             if m:
@@ -370,8 +370,6 @@ class SqlService:
     def fix_description_filter(sql, question):
         q = question.lower()
         if has_condition(sql, "description LIKE"):
-            return sql
-        if has_condition(sql, "category ="):
             return sql
         keyword = SqlService._extract_item_keyword(q)
         if not keyword or len(keyword) < 2 or keyword in [c.lower() for c in _ALL_CATEGORIES] or keyword.endswith('est'):

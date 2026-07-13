@@ -205,6 +205,7 @@ class QaService:
             return {"error": "Generated query is not a valid SELECT statement", "sql": sql, "trace": trace}
 
         sql = SqlService.ensure_user_filter(sql)
+        sql = SqlService.fix_description_filter(sql, question)
         if not from_pattern:
             sql = SqlService.apply_all_fixes(sql, question)
         trace["sql_fixes"] = round((_time.time() - t) * 1000, 1)
