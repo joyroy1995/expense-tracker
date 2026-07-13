@@ -40,7 +40,7 @@ _SKIP_WORDS = frozenset({
     "how", "what", "why", "when", "where", "which",
     "much", "many", "often", "did", "does", "do", "is", "are", "was",
     "were", "can", "could", "would", "will", "shall",
-    "expensive", "costly", "pricey",
+    "expensive", "costly", "pricey", "me", "of",
 })
 
 

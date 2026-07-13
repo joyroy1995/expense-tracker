@@ -16,11 +16,14 @@ _SKIP_WORDS = frozenset({
     'all', 'my', 'your', 'the', 'this', 'that', 'these', 'those', 'show',
     'list', 'get', 'give', 'find', 'see', 'view', 'display', 'print',
     'any', 'some', 'every', 'each', 'total', 'month', 'day', 'week', 'year',
-    'biggest', 'largest', 'smallest', 'cheapest', 'most', 'least',
+    'date', 'biggest', 'largest', 'smallest', 'cheapest', 'most', 'least',
     'highest', 'lowest', 'best', 'worst', 'recent', 'last', 'first',
     'previous', 'next', 'top', 'bottom',
     'today', 'todays', 'tonight', 'yesterday', 'yesterdays',
-    'overall',
+    'how', 'what', 'why', 'when', 'where', 'which',
+    'much', 'many', 'often', 'did', 'does', 'do', 'is', 'are', 'was',
+    'were', 'can', 'could', 'would', 'will', 'shall',
+    'expensive', 'costly', 'pricey', 'overall', 'me', 'of',
 })
 
 _SORT_COL_MAP = {
@@ -357,7 +360,9 @@ class SqlService:
             if m:
                 phrase = m.group(1).strip().lower()
                 parts = phrase.split()
-                if parts and parts[0] not in _SKIP_WORDS and not re.match(r'\d+(?:st|nd|rd|th)$', parts[0]):
+                while parts and parts[0] in _SKIP_WORDS:
+                    parts.pop(0)
+                if parts and not re.match(r'\d+(?:st|nd|rd|th)$', parts[0]):
                     valid = [parts[0]]
                     for p in parts[1:]:
                         if p in _SKIP_WORDS or re.match(r'\d+(?:st|nd|rd|th)$', p):
@@ -369,7 +374,7 @@ class SqlService:
     @staticmethod
     def fix_description_filter(sql, question):
         q = question.lower()
-        if has_condition(sql, "description LIKE"):
+        if has_condition(sql, "description LIKE") or has_condition(sql, "LOWER(description) LIKE"):
             return sql
         keyword = SqlService._extract_item_keyword(q)
         if not keyword or len(keyword) < 2 or keyword in [c.lower() for c in _ALL_CATEGORIES] or keyword.endswith('est'):
