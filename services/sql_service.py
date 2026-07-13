@@ -326,6 +326,45 @@ class SqlService:
         return sql
 
     @staticmethod
+    def fix_missing_date_filter(sql, question):
+        q = question.lower()
+        has_date = re.search(r'\bdate\s*(?:LIKE|=|>=|<=|>|<|BETWEEN)\b', sql, re.IGNORECASE)
+        if has_date:
+            return sql
+        now = datetime.now(TIMEZONE)
+        date_filter = None
+        if re.search(r'\bthis\s+month\b', q):
+            date_filter = f"date LIKE '{now.strftime('%Y-%m')}%'"
+        elif re.search(r'\blast\s+month\b', q):
+            last_month = (now.replace(day=1) - timedelta(days=1))
+            date_filter = f"date LIKE '{last_month.strftime('%Y-%m')}%'"
+        elif re.search(r'\bthis\s+week\b', q):
+            start = (now - timedelta(days=now.weekday())).strftime('%Y-%m-%d')
+            end = (now + timedelta(days=6 - now.weekday())).strftime('%Y-%m-%d')
+            date_filter = f"date >= '{start}' AND date <= '{end}'"
+        elif re.search(r'\blast\s+week\b', q):
+            end = (now - timedelta(days=now.weekday() + 1)).strftime('%Y-%m-%d')
+            start = (now - timedelta(days=now.weekday() + 7)).strftime('%Y-%m-%d')
+            date_filter = f"date >= '{start}' AND date <= '{end}'"
+        elif re.search(r'\bthis\s+year\b', q):
+            date_filter = f"date LIKE '{now.strftime('%Y')}%'"
+        elif re.search(r'\blast\s+year\b', q):
+            date_filter = f"date LIKE '{now.year - 1}%'"
+        elif re.search(r'\btoday\b', q):
+            date_filter = f"date = '{now.strftime('%Y-%m-%d')}'"
+        elif re.search(r'\byesterday\b', q):
+            yesterday = (now - timedelta(days=1)).strftime('%Y-%m-%d')
+            date_filter = f"date = '{yesterday}'"
+        if not date_filter:
+            return sql
+        sql = re.sub(
+            r'(\bWHERE\b)',
+            f'\\1 {date_filter} AND ',
+            sql, count=1, flags=re.IGNORECASE,
+        )
+        return sql
+
+    @staticmethod
     def fix_show_expenses_aggregate(sql, question):
         q = question.lower()
         show_intent = bool(re.search(r'\b(?:show|list|display)\b', q)) or \
@@ -465,6 +504,7 @@ class SqlService:
         sql = SqlService.fix_category_in_sql(sql, question)
         sql = SqlService.fix_description_filter(sql, question)
         sql = SqlService.fix_date_filter(sql, question)
+        sql = SqlService.fix_missing_date_filter(sql, question)
         sql = SqlService.fix_history_id_filter(sql, question)
 
         # Phase 2: SELECT-modifying fixers (mutually exclusive — only one should win)
