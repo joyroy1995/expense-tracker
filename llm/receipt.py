@@ -27,7 +27,7 @@ def _scan_receipt_groq(image_bytes):
     if not client:
         return None, "GROQ_API_KEY not configured"
     b64 = base64.b64encode(image_bytes).decode()
-    models = ["meta-llama/llama-4-scout-17b-16e-instruct", "llama-3.2-11b-vision-preview"]
+    models = ["qwen/qwen3.6-27b"]
     last_error = ""
     for model in models:
         try:

@@ -376,7 +376,9 @@ class SqlService:
         if show_intent:
             if not re.search(r'\b(?:expense|expenses|transaction|transactions|record|records)\b', q):
                 return sql
-            if re.search(r'\b(?:how\s+much|total|sum|amount|spent|spend)\b', q):
+            if re.search(r'\b(?:how\s+much|total|sum|spent|spend)\b', q):
+                return sql
+            if re.search(r'\bamount\b', q) and not re.search(r'\bsort\b.*\bamount\b', q):
                 return sql
         if not re.search(r'\b(?:SUM|COUNT|AVG|COALESCE)\s*\(', sql, re.IGNORECASE):
             return sql
@@ -516,7 +518,7 @@ class SqlService:
                 sql = SqlService.fix_category_breakdown_sql(sql, question)
         elif intent["is_breakdown"]:
             sql = SqlService.fix_category_breakdown_sql(sql, question)
-        elif intent["is_list"] and not intent["is_aggregate"]:
+        elif intent["is_list"]:
             sql = SqlService.fix_show_expenses_aggregate(sql, question)
         elif intent["is_aggregate"]:
             sql = SqlService.fix_aggregate_sql(sql, question)
