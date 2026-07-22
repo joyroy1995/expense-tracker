@@ -2,6 +2,7 @@ import json
 import base64
 import os
 import re
+import time
 import urllib.request
 import sys
 from llm.config import _get_client, LLM_TIMEOUT
@@ -31,40 +32,44 @@ def _scan_receipt_groq(image_bytes):
     models = ["qwen/qwen3.6-27b"]
     last_error = ""
     for model in models:
-        try:
-            response = client.chat.completions.create(
-                model=model,
-                messages=[{
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": RECEIPT_SCAN_PROMPT},
-                        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
-                    ],
-                }],
-                temperature=0.1,
-                max_completion_tokens=4096,
-                timeout=LLM_TIMEOUT,
-            )
-            raw = response.choices[0].message.content
-            if not raw:
-                last_error = f"Groq vision ({model}): empty response"
-                print(f"[WARN] {last_error}", file=sys.stderr)
+        for attempt in range(2):
+            try:
+                response = client.chat.completions.create(
+                    model=model,
+                    messages=[{
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": RECEIPT_SCAN_PROMPT},
+                            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
+                        ],
+                    }],
+                    temperature=0.1,
+                    max_completion_tokens=4096,
+                    timeout=60,
+                )
+                raw = response.choices[0].message.content
+                if not raw:
+                    last_error = f"Groq vision ({model}): empty response"
+                    print(f"[WARN] {last_error} (attempt {attempt+1})", file=sys.stderr)
+                    time.sleep(1)
+                    continue
+                text = raw.strip()
+                if "<think>" in text:
+                    text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+                text = text.strip("```").strip()
+                if text.lower().startswith("json"):
+                    text = text[4:].strip()
+                parsed = json.loads(text)
+                return parsed, None
+            except json.JSONDecodeError as e:
+                last_error = f"Groq vision ({model}): invalid JSON response - {e}"
+                print(f"[ERROR] _scan_receipt_groq JSON decode error: {last_error}", file=sys.stderr)
+            except Exception as e:
+                last_error = f"Groq vision ({model}): {type(e).__name__} - {e}"
+                print(f"[ERROR] _scan_receipt_groq failed: {last_error} (attempt {attempt+1})", file=sys.stderr)
+                time.sleep(1)
                 continue
-            text = raw.strip()
-            if "<think>" in text:
-                text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
-            text = text.strip("```").strip()
-            if text.lower().startswith("json"):
-                text = text[4:].strip()
-            parsed = json.loads(text)
-            return parsed, None
-        except json.JSONDecodeError as e:
-            last_error = f"Groq vision ({model}): invalid JSON response - {e}"
-            print(f"[ERROR] _scan_receipt_groq JSON decode error: {last_error}", file=sys.stderr)
-        except Exception as e:
-            last_error = f"Groq vision ({model}): {type(e).__name__} - {e}"
-            print(f"[ERROR] _scan_receipt_groq failed: {last_error}", file=sys.stderr)
-            continue
+            break
     return None, last_error
 
 
