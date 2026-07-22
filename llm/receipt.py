@@ -41,10 +41,18 @@ def _scan_receipt_groq(image_bytes):
                     ],
                 }],
                 temperature=0.1,
-                max_tokens=1000,
-                timeout=LLM_TIMEOUT,
+                max_completion_tokens=4096,
             )
-            text = response.choices[0].message.content.strip().strip("```").strip()
+            raw = response.choices[0].message.content
+            if not raw:
+                last_error = f"Groq vision ({model}): empty response"
+                print(f"[WARN] {last_error}", file=sys.stderr)
+                continue
+            text = raw.strip()
+            if text.startswith("<think>"):
+                import re
+                text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+            text = text.strip("```").strip()
             if text.lower().startswith("json"):
                 text = text[4:].strip()
             parsed = json.loads(text)
@@ -106,7 +114,7 @@ def scan_receipt(image_bytes):
             if not item.get("amount"):
                 item["amount"] = extract_amount_fallback(desc) or 0
 
-    result, error = _scan_receipt_groq(image_bytes)
+    result, groq_error = _scan_receipt_groq(image_bytes)
     if result is not None:
         if result.get("items"):
             _categorize_items(result["items"])
@@ -118,6 +126,6 @@ def scan_receipt(image_bytes):
             _categorize_items(result["items"])
             return result
         return {"error": "Receipt detected but no line items found. Try a clearer photo."}
-    error_msg = error if error else gemini_error or "No vision API available. Set GROQ_API_KEY or GEMINI_API_KEY."
-    print(f"[ERROR] scan_receipt failed: {error_msg}", file=sys.stderr)
+    print(f"[ERROR] scan_receipt failed: Groq={groq_error} | Gemini={gemini_error}", file=sys.stderr)
+    error_msg = groq_error if groq_error else gemini_error or "No vision API available. Set GROQ_API_KEY or GEMINI_API_KEY."
     return {"error": error_msg}
