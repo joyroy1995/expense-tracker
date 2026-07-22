@@ -135,7 +135,7 @@ def generate_forecast(data):
                 {"role": "user", "content": prompt},
             ],
             temperature=0.3,
-            max_tokens=300,
+            max_completion_tokens=300,
             timeout=LLM_TIMEOUT,
         )
         text = response.choices[0].message.content.strip().strip("```").strip()

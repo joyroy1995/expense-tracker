@@ -113,7 +113,7 @@ def extract_expense(description, learned_categories=None):
                 {"role": "user", "content": description},
             ],
             temperature=0.1,
-            max_tokens=100,
+            max_completion_tokens=100,
         )
         text = response.choices[0].message.content.strip().strip("```").strip()
 

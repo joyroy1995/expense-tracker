@@ -99,7 +99,7 @@ def decompose_question(question, schema, history=None):
                 {"role": "user", "content": prompt},
             ],
             temperature=0.1,
-            max_tokens=200,
+            max_completion_tokens=200,
             timeout=LLM_TIMEOUT,
         )
         text = response.choices[0].message.content.strip().strip("```").strip()
@@ -150,7 +150,7 @@ def compose_answers(question, sub_results, history=None):
                 {"role": "user", "content": prompt},
             ],
             temperature=0.1,
-            max_tokens=300,
+            max_completion_tokens=300,
             timeout=LLM_TIMEOUT,
         )
         return response.choices[0].message.content.strip()

@@ -43,6 +43,7 @@ def _scan_receipt_groq(image_bytes):
                 }],
                 temperature=0.1,
                 max_completion_tokens=4096,
+                timeout=LLM_TIMEOUT,
             )
             raw = response.choices[0].message.content
             if not raw:

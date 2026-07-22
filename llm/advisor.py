@@ -265,7 +265,7 @@ def generate_analysis(category_totals, monthly_totals_with_breakdown, now=None, 
                     {"role": "user", "content": prompt},
                 ],
                 temperature=0.3,
-                max_tokens=800,
+                max_completion_tokens=800,
                 timeout=LLM_TIMEOUT,
             )
             text = response.choices[0].message.content.strip().strip("```").strip()
