@@ -1,6 +1,7 @@
 import json
 import base64
 import os
+import re
 import urllib.request
 import sys
 from llm.config import _get_client, LLM_TIMEOUT
@@ -49,7 +50,6 @@ def _scan_receipt_groq(image_bytes):
                 print(f"[WARN] {last_error}", file=sys.stderr)
                 continue
             text = raw.strip()
-            import re
             if "<think>" in text:
                 text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
             text = text.strip("```").strip()
