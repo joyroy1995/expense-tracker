@@ -12,8 +12,8 @@ RECEIPT_SCAN_PROMPT = """You are a receipt parser for a Bangladeshi expense trac
 Given a receipt image, extract all line items.
 
 For each item, return:
-- description: the item name (keep quantity like "1 kg", "2 ta", etc.)
-- amount: the price in BDT (number only, no currency symbol)
+- description: the item name together with its quantity/units, e.g. "1 kg rice", "2 ta egg", "500 gm sugar"
+- amount: ONLY the taka price for that line (number only, no currency symbol, no quantity like "2 x", "1 kg")
 
 If a store/merchant name or date is visible on the receipt, include them.
 If the receipt text is in Bengali or Banglish, extract and return in that form.
@@ -22,6 +22,22 @@ Return ONLY a valid JSON object with this exact structure:
 {"store": "store name or null", "date": "YYYY-MM-DD or null", "items": [{"description": "...", "amount": 123.45}]}
 
 Do not add any explanation or extra text."""
+
+
+def _normalize_amount(value):
+    if isinstance(value, (int, float)):
+        return value
+    text = str(value or "").strip()
+    if not text:
+        return None
+    m = re.match(r"^(\d+)\s*[x*]\s*([\d.]+)$", text)
+    if m:
+        return float(m.group(1)) * float(m.group(2))
+    text = re.sub(r"(taka|tk|৳|টাকা)", "", text, flags=re.IGNORECASE).strip()
+    nums = re.findall(r"\d+(?:\.\d+)?", text)
+    if nums:
+        return float(nums[-1])
+    return None
 
 
 _GEMINI_MODELS = [
@@ -150,8 +166,8 @@ def scan_receipt(image_bytes):
         for item in items:
             desc = item.get("description", "")
             item["category"] = keyword_category(desc)
-            if not item.get("amount"):
-                item["amount"] = extract_amount_fallback(desc) or 0
+            amount = _normalize_amount(item.get("amount")) or extract_amount_fallback(desc) or 0
+            item["amount"] = round(amount, 2)
 
     result, gemini_error = _scan_receipt_gemini_flash(image_bytes)
     if result is not None:
