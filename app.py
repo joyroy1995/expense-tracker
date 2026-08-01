@@ -53,11 +53,13 @@ def inject_static_version():
 
 
 def _clean_subcategory(category, subcategory, description=""):
-    """Return a valid grocery subcategory for Groceries, else None."""
+    """Return the grocery subcategory for Groceries, else None.
+    Accepts custom/free-form subcategories; auto-detects when blank."""
     if category != "Groceries":
         return None
-    if subcategory and subcategory in GROCERY_SUBCATEGORIES:
-        return subcategory
+    sub = (subcategory or "").strip()
+    if sub:
+        return sub
     return grocery_subcategory(description or "")
 
 

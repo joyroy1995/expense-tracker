@@ -365,17 +365,19 @@ class TestExpenseCRUDAPI:
         saved = db.get_expense_by_id(data["id"])
         assert saved["subcategory"] == "Meat"
 
-    def test_add_expense_grocery_subcategory_invalid_falls_back(self, auth_client):
+    def test_add_expense_grocery_subcategory_custom(self, auth_client):
         resp = auth_client.post("/api/add_expense", json={
             "description": "aloo ar begun 120",
             "amount": 120,
             "category": "Groceries",
-            "subcategory": "NotARealSubcat",
+            "subcategory": "Home Made",
         })
         assert resp.status_code == 200
         data = resp.get_json()
         assert data["category"] == "Groceries"
-        assert data["subcategory"] in ("Vegetables", "General")
+        assert data["subcategory"] == "Home Made"
+        saved = db.get_expense_by_id(data["id"])
+        assert saved["subcategory"] == "Home Made"
 
     def test_add_expense_non_grocery_subcategory_cleared(self, auth_client):
         resp = auth_client.post("/api/add_expense", json={
@@ -570,12 +572,13 @@ class TestBulkExpenseAPI:
             "items": [
                 {"description": "murgi 220", "amount": 220, "category": "Groceries", "subcategory": "Meat"},
                 {"description": "aloo", "amount": 40, "category": "Groceries", "subcategory": "Vegetables"},
+                {"description": "custom item", "amount": 60, "category": "Groceries", "subcategory": "Bakery"},
             ],
         })
         assert resp.status_code == 200
         data = resp.get_json()
-        assert data["count"] == 2
-        assert {e["subcategory"] for e in data["expenses"]} == {"Meat", "Vegetables"}
+        assert data["count"] == 3
+        assert {e["subcategory"] for e in data["expenses"]} == {"Meat", "Vegetables", "Bakery"}
 
     def test_bulk_skips_invalid_items(self, auth_client):
         resp = auth_client.post("/api/expenses/bulk", json={

@@ -243,12 +243,26 @@ function buildCategoryOptions(selected) {
   ).join('');
 }
 
-function buildSubcategoryOptions(selected) {
-  const subs = window.grocerySubcategories || [];
-  if (!subs.length) return '';
-  return subs.map(s =>
-    `<option value="${s}" ${s === selected ? 'selected' : ''}>${s}</option>`
-  ).join('');
+function ensureSubcategoryDatalist() {
+  let dl = document.getElementById('grocerySubcatList');
+  if (!dl) {
+    dl = document.createElement('datalist');
+    dl.id = 'grocerySubcatList';
+    document.body.appendChild(dl);
+  }
+  if (!dl.options.length) {
+    dl.innerHTML = (window.grocerySubcategories || []).map(s =>
+      `<option value="${s}"></option>`
+    ).join('');
+  }
+  return dl;
+}
+
+function subcategoryInputHtml(selected, className, id) {
+  ensureSubcategoryDatalist();
+  const idAttr = id ? `id="${id}"` : '';
+  const value = selected || 'General';
+  return `<input type="text" ${idAttr} class="${className}" list="grocerySubcatList" value="${esc(value)}" placeholder="Type or pick a subcategory">`;
 }
 
 function subBadge(sub) {
@@ -258,9 +272,7 @@ function subBadge(sub) {
 function subcategorySelectHtml(selected) {
   return `
     <label class="preview-field-label">Subcategory</label>
-    <select class="preview-subcategory-select">
-      ${buildSubcategoryOptions(selected)}
-    </select>`;
+    ${subcategoryInputHtml(selected, 'preview-subcategory-select')}`;
 }
 
 function makeExpenseItem(exp) {
@@ -374,7 +386,7 @@ async function editExpense(id) {
         ${exp.category === 'Groceries' ? `
         <div class="modal-field" id="editSubcatField">
           <label for="editSubcategory">Subcategory</label>
-          <select id="editSubcategory">${buildSubcategoryOptions(exp.subcategory || 'General')}</select>
+          ${subcategoryInputHtml(exp.subcategory || 'General', 'edit-subcategory-input', 'editSubcategory')}
         </div>` : ''}
       </div>
       <div class="modal-footer">
@@ -405,7 +417,7 @@ async function editExpense(id) {
       newField.id = 'editSubcatField';
       newField.innerHTML = `
         <label for="editSubcategory">Subcategory</label>
-        <select id="editSubcategory">${buildSubcategoryOptions('General')}</select>`;
+        ${subcategoryInputHtml('General', 'edit-subcategory-input', 'editSubcategory')}`;
       catField.insertAdjacentElement('afterend', newField);
     } else if (!isGroceries && subcatField) {
       subcatField.remove();
@@ -1073,6 +1085,8 @@ function renderSplitPreview(items) {
   const submitBtn = document.getElementById('submitBtn');
   if (!preview) return;
 
+  ensureSubcategoryDatalist();
+
   const total = items.reduce((s, i) => s + (i.amount || 0), 0);
   let rowsHtml = items.map((item, idx) => renderSplitItemRow(item, idx)).join('');
 
@@ -1095,10 +1109,10 @@ function renderSplitPreview(items) {
 function renderSplitItemRow(item, idx) {
   const descSafe = item.description.replace(/'/g, "\\'");
   const isGrocery = item.category === 'Groceries';
-  const subSelect = isGrocery
-    ? `<select class="split-item-subcat" onchange="updateSplitItem(${idx},'sub',this.value)">
-        ${buildSubcategoryOptions(item.subcategory || 'General')}
-      </select>`
+  const subInput = isGrocery
+    ? `<input type="text" class="split-item-subcat" list="grocerySubcatList"
+         value="${esc(item.subcategory || 'General')}" placeholder="Type or pick"
+         onchange="updateSplitItem(${idx},'sub',this.value)">`
     : '';
   return `
     <div class="split-preview-row" data-idx="${idx}">
@@ -1108,7 +1122,7 @@ function renderSplitItemRow(item, idx) {
       <select class="split-item-cat" onchange="updateSplitItem(${idx},'cat',this.value)">
         ${buildCategoryOptions(item.category)}
       </select>
-      ${subSelect}
+      ${subInput}
       <div class="split-item-amount-wrap">
         <span class="split-currency-sign">৳</span>
         <input type="number" class="split-item-amount" step="0.01" min="0" value="${item.amount.toFixed(2)}"
