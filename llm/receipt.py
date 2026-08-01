@@ -3,6 +3,7 @@ import base64
 import os
 import re
 import time
+import urllib.error
 import urllib.request
 import sys
 from llm.categories import keyword_category, extract_amount_fallback
@@ -23,13 +24,20 @@ Return ONLY a valid JSON object with this exact structure:
 Do not add any explanation or extra text."""
 
 
+_GEMINI_MODELS = [
+    "gemini-2.5-flash-latest",
+    "gemini-3-flash-latest",
+    "gemini-3-flash-preview",
+    "gemini-2.5-flash",
+]
+
+
 def _scan_receipt_gemini_flash(image_bytes):
     api_key = os.environ.get("GEMINI_API_KEY", "")
     if not api_key:
         return None, "GEMINI_API_KEY not configured"
     b64 = base64.b64encode(image_bytes).decode()
 
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}"
     payload = {
         "contents": [{
             "parts": [
@@ -38,28 +46,50 @@ def _scan_receipt_gemini_flash(image_bytes):
             ],
         }],
     }
-    try:
-        req = urllib.request.Request(
-            url,
-            data=json.dumps(payload).encode(),
-            headers={"Content-Type": "application/json"},
-        )
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            result = json.loads(resp.read().decode())
-        text = result["candidates"][0]["content"]["parts"][0]["text"]
-        text = text.strip().strip("```").strip()
-        if text.lower().startswith("json"):
-            text = text[4:].strip()
-        parsed = json.loads(text)
-        return parsed, None
-    except json.JSONDecodeError as e:
-        error_msg = f"Gemini: invalid JSON response - {e}"
-        print(f"[ERROR] _scan_receipt_gemini_flash JSON decode error: {error_msg}", file=sys.stderr)
-        return None, error_msg
-    except Exception as e:
-        error_msg = f"Gemini: {type(e).__name__} - {e}"
-        print(f"[ERROR] _scan_receipt_gemini_flash failed: {error_msg}", file=sys.stderr)
-        return None, error_msg
+    not_found_models = []
+    for model in _GEMINI_MODELS:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
+        try:
+            req = urllib.request.Request(
+                url,
+                data=json.dumps(payload).encode(),
+                headers={"Content-Type": "application/json"},
+            )
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                result = json.loads(resp.read().decode())
+            text = result["candidates"][0]["content"]["parts"][0]["text"]
+            text = text.strip().strip("```").strip()
+            if text.lower().startswith("json"):
+                text = text[4:].strip()
+            parsed = json.loads(text)
+            return parsed, None
+        except urllib.error.HTTPError as e:
+            body = ""
+            try:
+                body = e.read().decode(errors="replace")
+            except Exception:
+                pass
+            if e.code == 404:
+                not_found_models.append(model)
+                print(f"[WARN] _scan_receipt_gemini_flash model {model} not found: {body or e.reason}", file=sys.stderr)
+                continue
+            error_msg = f"Gemini ({model}): HTTP {e.code} - {body or e.reason}"
+            print(f"[ERROR] _scan_receipt_gemini_flash failed: {error_msg}", file=sys.stderr)
+            return None, error_msg
+        except json.JSONDecodeError as e:
+            error_msg = f"Gemini ({model}): invalid JSON response - {e}"
+            print(f"[ERROR] _scan_receipt_gemini_flash JSON decode error: {error_msg}", file=sys.stderr)
+            return None, error_msg
+        except Exception as e:
+            error_msg = f"Gemini ({model}): {type(e).__name__} - {e}"
+            print(f"[ERROR] _scan_receipt_gemini_flash failed: {error_msg}", file=sys.stderr)
+            return None, error_msg
+    if not_found_models:
+        error_msg = f"Gemini: no available model (tried {', '.join(not_found_models)})"
+    else:
+        error_msg = "Gemini: no models to try"
+    print(f"[ERROR] _scan_receipt_gemini_flash failed: {error_msg}", file=sys.stderr)
+    return None, error_msg
 
 
 def _scan_receipt_groq(image_bytes):
