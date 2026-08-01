@@ -17,19 +17,20 @@ def _user_params(user_id):
     return {}
 
 
-def add_expense(date, description, amount, category, user_id=1):
+def add_expense(date, description, amount, category, subcategory=None, user_id=1):
     conn = get_connection()
     now = datetime.now(TIMEZONE).strftime("%Y-%m-%d %H:%M:%S")
     result = conn.execute(
         text("""
-            INSERT INTO expenses (date, description, amount, category, user_id, created_at)
-            VALUES (:date, :description, :amount, :category, :user_id, :created_at)
+            INSERT INTO expenses (date, description, amount, category, subcategory, user_id, created_at)
+            VALUES (:date, :description, :amount, :category, :subcategory, :user_id, :created_at)
         """),
         {
             "date": date,
             "description": description,
             "amount": amount,
             "category": category,
+            "subcategory": subcategory,
             "user_id": user_id,
             "created_at": now,
         },
@@ -199,6 +200,28 @@ def get_category_totals_by_month(year, month, user_id=None):
     return [dict(row._mapping) for row in result]
 
 
+def get_subcategory_totals_by_month(year, month, category, user_id=None):
+    conn = get_connection()
+    month_pattern = f"{year}-{month:02d}%"
+    conditions = ["date LIKE :pattern", "category = :category"]
+    params = {"pattern": month_pattern, "category": category}
+    if user_id is not None:
+        conditions.append("user_id = :user_id")
+        params["user_id"] = user_id
+    where_clause = " AND ".join(conditions)
+    result = conn.execute(
+        text(f"""
+            SELECT COALESCE(subcategory, 'General') as subcategory, SUM(amount) as total, COUNT(*) as count
+            FROM expenses
+            WHERE {where_clause}
+            GROUP BY COALESCE(subcategory, 'General')
+            ORDER BY total DESC
+        """),
+        params,
+    )
+    return [dict(row._mapping) for row in result]
+
+
 def get_monthly_totals(months=6, user_id=None):
     conn = get_connection()
     uf = _user_filter(user_id)
@@ -313,8 +336,10 @@ def get_distinct_years(user_id=None):
 
 
 def update_expense(expense_id, **kwargs):
-    allowed = {"date", "description", "amount", "category"}
+    allowed = {"date", "description", "amount", "category", "subcategory"}
     updates = {k: v for k, v in kwargs.items() if k in allowed and v is not None}
+    if "subcategory" in kwargs:
+        updates["subcategory"] = kwargs["subcategory"]
     if not updates:
         return False
     conn = get_connection()

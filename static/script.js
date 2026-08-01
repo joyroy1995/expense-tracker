@@ -243,12 +243,33 @@ function buildCategoryOptions(selected) {
   ).join('');
 }
 
+function buildSubcategoryOptions(selected) {
+  const subs = window.grocerySubcategories || [];
+  if (!subs.length) return '';
+  return subs.map(s =>
+    `<option value="${s}" ${s === selected ? 'selected' : ''}>${s}</option>`
+  ).join('');
+}
+
+function subBadge(sub) {
+  return sub ? `<span class="subcategory-badge">${esc(sub)}</span>` : '';
+}
+
+function subcategorySelectHtml(selected) {
+  return `
+    <label class="preview-field-label">Subcategory</label>
+    <select class="preview-subcategory-select">
+      ${buildSubcategoryOptions(selected)}
+    </select>`;
+}
+
 function makeExpenseItem(exp) {
   return `
     <div class="expense-item" data-id="${exp.id}">
       <div class="expense-info">
         <div class="expense-description">${esc(exp.description)}</div>
         <span class="category-badge" style="background-color: ${exp.color}">${esc(exp.category)}</span>
+        ${subBadge(exp.subcategory)}
       </div>
       <div class="expense-actions">
         <span class="expense-amount">৳${Number(exp.amount).toFixed(2)}</span>
@@ -350,6 +371,11 @@ async function editExpense(id) {
           <label for="editCategory">Category</label>
           <select id="editCategory">${buildCategoryOptions(exp.category)}</select>
         </div>
+        ${exp.category === 'Groceries' ? `
+        <div class="modal-field" id="editSubcatField">
+          <label for="editSubcategory">Subcategory</label>
+          <select id="editSubcategory">${buildSubcategoryOptions(exp.subcategory || 'General')}</select>
+        </div>` : ''}
       </div>
       <div class="modal-footer">
         <button class="btn btn-outline" id="editCancelBtn">Cancel</button>
@@ -369,6 +395,23 @@ async function editExpense(id) {
     if (e.target === overlay) closeModal();
   });
 
+  document.getElementById('editCategory').addEventListener('change', (e) => {
+    const isGroceries = e.target.value === 'Groceries';
+    const subcatField = document.getElementById('editSubcatField');
+    if (isGroceries && !subcatField) {
+      const catField = e.target.closest('.modal-field');
+      const newField = document.createElement('div');
+      newField.className = 'modal-field';
+      newField.id = 'editSubcatField';
+      newField.innerHTML = `
+        <label for="editSubcategory">Subcategory</label>
+        <select id="editSubcategory">${buildSubcategoryOptions('General')}</select>`;
+      catField.insertAdjacentElement('afterend', newField);
+    } else if (!isGroceries && subcatField) {
+      subcatField.remove();
+    }
+  });
+
   document.getElementById('editSaveBtn').addEventListener('click', async () => {
     const btn = document.getElementById('editSaveBtn');
     const origText = btn.textContent;
@@ -379,11 +422,13 @@ async function editExpense(id) {
     const description = document.getElementById('editDescription').value.trim();
     const amount = parseFloat(document.getElementById('editAmount').value);
     const category = document.getElementById('editCategory').value;
+    const subcatEl = document.getElementById('editSubcategory');
+    const subcategory = subcatEl ? subcatEl.value : null;
 
     if (!description) { showToast('Description required', 'error'); btn.disabled = false; btn.textContent = origText; return; }
     if (!amount || amount <= 0) { showToast('Amount must be positive', 'error'); btn.disabled = false; btn.textContent = origText; return; }
 
-    const saveRes = await api.put(`/api/expenses/${id}`, { date, description, amount, category });
+    const saveRes = await api.put(`/api/expenses/${id}`, { date, description, amount, category, subcategory });
     btn.disabled = false;
     btn.textContent = origText;
 
@@ -401,6 +446,10 @@ async function editExpense(id) {
       const badge = el.querySelector('.category-badge');
       badge.textContent = saveRes.data.category;
       badge.style.backgroundColor = saveRes.data.color;
+      el.querySelectorAll('.subcategory-badge').forEach(b => b.remove());
+      if (saveRes.data.subcategory) {
+        badge.insertAdjacentHTML('afterend', `<span class="subcategory-badge">${esc(saveRes.data.subcategory)}</span>`);
+      }
     }
   });
 
@@ -644,6 +693,7 @@ async function renderHome(page = 1) {
   if (!res.ok) { handleAuthError(res); return; }
   const d = res.data;
   window.categoryColors = d.category_colors;
+  window.grocerySubcategories = d.grocery_subcategories || [];
 
   // Auto-process due recurring transactions
   api.post('/api/recurring/process').then(pRes => {
@@ -822,6 +872,7 @@ function attachExpenseForm(today) {
       description: item.description || '',
       amount: item.amount || 0,
       category: item.category || 'Other',
+      subcategory: item.category === 'Groceries' ? (item.subcategory || 'General') : null,
     }));
     splitMode = true;
     renderSplitPreview(splitItemsCache);
@@ -849,6 +900,7 @@ function attachExpenseForm(today) {
     if (!res.ok || !res.data.category) return;
     const data = res.data;
     const catColor = data.color || '#6b7280';
+    const isGrocery = data.category === 'Groceries';
     preview.innerHTML = `
       <div class="preview-card editable-preview">
         <div class="preview-field">
@@ -857,6 +909,10 @@ function attachExpenseForm(today) {
             ${buildCategoryOptions(data.category)}
           </select>
         </div>
+        ${isGrocery ? `
+        <div class="preview-field">
+          ${subcategorySelectHtml(data.subcategory)}
+        </div>` : ''}
         <div class="preview-field preview-amount-field">
           <label class="preview-field-label">Amount (৳)</label>
           <div class="preview-amount-input-wrap">
@@ -868,6 +924,20 @@ function attachExpenseForm(today) {
     preview.querySelectorAll('select, input').forEach(el => {
       el.addEventListener('change', () => { userModifiedPreview = true; });
       el.addEventListener('input', () => { userModifiedPreview = true; });
+    });
+    preview.querySelector('.preview-category-select')?.addEventListener('change', (e) => {
+      const isGroceries = e.target.value === 'Groceries';
+      const existing = preview.querySelector('.preview-subcategory-select');
+      const catField = e.target.closest('.preview-field');
+      if (isGroceries && !existing) {
+        const subField = document.createElement('div');
+        subField.className = 'preview-field';
+        subField.innerHTML = subcategorySelectHtml(data.subcategory);
+        catField.insertAdjacentElement('afterend', subField);
+        subField.querySelector('.preview-subcategory-select').addEventListener('change', () => { userModifiedPreview = true; });
+      } else if (!isGroceries && existing) {
+        existing.closest('.preview-field').remove();
+      }
     });
 
     // Check if description looks splittable
@@ -882,7 +952,12 @@ function attachExpenseForm(today) {
   function getPreviewValues() {
     const s = preview.querySelector('.preview-category-select');
     const a = preview.querySelector('.preview-amount-input');
-    return s && a ? { category: s.value, amount: parseFloat(a.value) || 0 } : null;
+    const sub = preview.querySelector('.preview-subcategory-select');
+    return s && a ? {
+      category: s.value,
+      subcategory: s.value === 'Groceries' && sub ? sub.value : null,
+      amount: parseFloat(a.value) || 0,
+    } : null;
   }
 
   form.addEventListener('submit', async (e) => {
@@ -929,6 +1004,7 @@ function attachExpenseForm(today) {
     if (pv) {
       fd.category = pv.category;
       fd.amount = pv.amount;
+      fd.subcategory = pv.subcategory || null;
       if (userModifiedPreview) fd.learn = true;
     }
 
@@ -982,8 +1058,13 @@ async function triggerSplit(btnEl) {
     return;
   }
 
-  splitItemsCache = res.data.items;
-  renderSplitPreview(res.data.items);
+  splitItemsCache = res.data.items.map(item => ({
+    description: item.description || '',
+    amount: item.amount || 0,
+    category: item.category || 'Other',
+    subcategory: item.category === 'Groceries' ? (item.subcategory || 'General') : null,
+  }));
+  renderSplitPreview(splitItemsCache);
   splitMode = true;
 }
 
@@ -1013,6 +1094,12 @@ function renderSplitPreview(items) {
 
 function renderSplitItemRow(item, idx) {
   const descSafe = item.description.replace(/'/g, "\\'");
+  const isGrocery = item.category === 'Groceries';
+  const subSelect = isGrocery
+    ? `<select class="split-item-subcat" onchange="updateSplitItem(${idx},'sub',this.value)">
+        ${buildSubcategoryOptions(item.subcategory || 'General')}
+      </select>`
+    : '';
   return `
     <div class="split-preview-row" data-idx="${idx}">
       <input type="text" class="split-item-desc" value="${esc(item.description)}"
@@ -1021,6 +1108,7 @@ function renderSplitItemRow(item, idx) {
       <select class="split-item-cat" onchange="updateSplitItem(${idx},'cat',this.value)">
         ${buildCategoryOptions(item.category)}
       </select>
+      ${subSelect}
       <div class="split-item-amount-wrap">
         <span class="split-currency-sign">৳</span>
         <input type="number" class="split-item-amount" step="0.01" min="0" value="${item.amount.toFixed(2)}"
@@ -1033,7 +1121,14 @@ function renderSplitItemRow(item, idx) {
 function updateSplitItem(idx, field, value) {
   if (!splitItemsCache[idx]) return;
   if (field === 'desc') splitItemsCache[idx].description = value;
-  else if (field === 'cat') splitItemsCache[idx].category = value;
+  else if (field === 'cat') {
+    splitItemsCache[idx].category = value;
+    const container = document.getElementById('splitRows');
+    if (container) {
+      container.innerHTML = splitItemsCache.map((item, i) => renderSplitItemRow(item, i)).join('');
+    }
+  }
+  else if (field === 'sub') splitItemsCache[idx].subcategory = value;
   else if (field === 'amt') splitItemsCache[idx].amount = value;
   updateSplitTotal();
 }
@@ -1210,6 +1305,7 @@ async function loadSessionExpenses(id) {
         <div class="expense-info">
           <div class="expense-description">${esc(e.description)}</div>
           <span class="category-badge" style="background-color: ${e.color || '#6b7280'}">${esc(e.category)}</span>
+          ${subBadge(e.subcategory)}
         </div>
         <div class="expense-actions">
           <span class="expense-amount">৳${Number(e.amount).toFixed(2)}</span>
@@ -1329,6 +1425,7 @@ async function renderDashboard(params) {
   const d = dashRes.data;
   const fc = forecastRes?.ok ? forecastRes.data : null;
   window.categoryColors = d.category_colors;
+  window.grocerySubcategories = d.grocery_subcategories || [];
   expandedCategory = null;
   const monthNames = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
   const monthAbbr = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -1594,7 +1691,20 @@ async function toggleCategoryExpansion(category) {
     ? makeDateGroups(d.expenses)
     : '<div class="empty-state"><p>No expenses for this category</p></div>';
 
-  loader.innerHTML = `<td colspan="4"><div class="category-expanded-content"><div class="category-expense-list">${body}</div></div></td>`;
+  let subHtml = '';
+  if (d.subcategory_totals && d.subcategory_totals.length) {
+    subHtml = `
+      <div class="subcategory-summary">
+        ${d.subcategory_totals.map(s => `
+          <div class="subcategory-chip" data-subcat="${esc(s.subcategory)}">
+            <span class="subcategory-chip-name">${esc(s.subcategory)}</span>
+            <span class="subcategory-chip-amount">৳${Number(s.total).toFixed(2)}</span>
+            <span class="subcategory-chip-count">${s.count}×</span>
+          </div>`).join('')}
+      </div>`;
+  }
+
+  loader.innerHTML = `<td colspan="4"><div class="category-expanded-content"><div class="category-expense-list">${subHtml}${body}</div></div></td>`;
 }
 
 function cssVar(name) {
@@ -2942,6 +3052,7 @@ async function refreshHomeData() {
   if (!res.ok) return;
   const d = res.data;
   window.categoryColors = d.category_colors;
+  window.grocerySubcategories = d.grocery_subcategories || [];
 
   // Update stats
   const statValues = document.querySelectorAll('.stat-value');

@@ -12,6 +12,7 @@ import json
 import database as db
 from database import _ALL_CATEGORIES
 from llm import extract_expense, predict_expense, extract_keywords, split_expenses, _clean_split_desc, extract_date_reference, clean_date_refs, detect_budget_intent, is_question, transcribe_audio, scan_receipt, generate_forecast, extract_session_reason
+from llm.categories import GROCERY_SUBCATEGORIES, grocery_subcategory
 from config import SECRET_KEY, CATEGORY_COLORS, TIMEZONE
 from services.sql_service import SqlService
 from services.qa_service import QaService
@@ -49,6 +50,15 @@ def _static_version():
 @app.context_processor
 def inject_static_version():
     return dict(static_version=_static_version())
+
+
+def _clean_subcategory(category, subcategory, description=""):
+    """Return a valid grocery subcategory for Groceries, else None."""
+    if category != "Groceries":
+        return None
+    if subcategory and subcategory in GROCERY_SUBCATEGORIES:
+        return subcategory
+    return grocery_subcategory(description or "")
 
 
 # ── Close DB connection after each request ─────────────────
@@ -244,6 +254,7 @@ def api_index():
         "month_total": month_total,
         "today_expenses": today_expenses,
         "category_colors": CATEGORY_COLORS,
+        "grocery_subcategories": GROCERY_SUBCATEGORIES,
         "budget_alerts": budget_alerts,
     })
 
@@ -302,6 +313,7 @@ def api_dashboard():
         "filter_user_id": filter_user_id,
         "users_list": users_list,
         "category_colors": CATEGORY_COLORS,
+        "grocery_subcategories": GROCERY_SUBCATEGORIES,
         "role": session.get("role"),
     })
 
@@ -615,18 +627,20 @@ def api_expenses_bulk():
         amount = float(item.get("amount", 0))
         if not desc or amount <= 0:
             continue
+        subcategory = _clean_subcategory(category, item.get("subcategory"), desc)
 
         # Auto-learn from confirmed split items
         for kw in extract_keywords(desc):
             db.learn_category(session["user_id"], kw, category)
 
-        expense_id = db.add_expense(date, desc, amount, category, user_id=session["user_id"])
+        expense_id = db.add_expense(date, desc, amount, category, subcategory=subcategory, user_id=session["user_id"])
         saved.append({
             "id": expense_id,
             "date": date,
             "description": desc,
             "amount": amount,
             "category": category,
+            "subcategory": subcategory,
             "color": CATEGORY_COLORS.get(category, "#6b7280"),
         })
 
@@ -669,6 +683,7 @@ def api_add_expense():
 
     category = data.get("category")
     amount = data.get("amount")
+    subcategory = data.get("subcategory")
 
     if category and amount is not None and float(amount) > 0:
         amount = float(amount)
@@ -676,16 +691,19 @@ def api_add_expense():
         result = extract_expense(description)
         category = result["category"]
         amount = result["amount"]
+        subcategory = result.get("subcategory")
 
     if amount <= 0:
         return jsonify({"error": "Could not extract amount. Please include the amount in your text."}), 400
+
+    subcategory = _clean_subcategory(category, subcategory, clean_desc)
 
     # Learn from user-corrected predictions
     if data.get("learn"):
         for kw in extract_keywords(clean_desc):
             db.learn_category(session["user_id"], kw, category)
 
-    expense_id = db.add_expense(date, clean_desc, amount, category, user_id=session["user_id"])
+    expense_id = db.add_expense(date, clean_desc, amount, category, subcategory=subcategory, user_id=session["user_id"])
 
     if not data.get("from_chat"):
         budget_alerts = db.get_budget_status(session["user_id"])
@@ -713,6 +731,7 @@ def api_add_expense():
             "description": clean_desc,
             "amount": amount,
             "category": category,
+            "subcategory": subcategory,
             "color": CATEGORY_COLORS.get(category, "#6b7280"),
             "budget_alerts": budget_alerts,
         }
@@ -734,6 +753,7 @@ def api_predict_expense():
         return jsonify(
             {
                 "category": result["category"],
+                "subcategory": result.get("subcategory"),
                 "amount": result["amount"],
                 "color": CATEGORY_COLORS.get(result["category"], "#6b7280"),
             }
@@ -778,6 +798,7 @@ def api_update_expense(expense_id):
     description = data.get("description", "").strip()
     amount = data.get("amount")
     category = data.get("category", "").strip()
+    subcategory = data.get("subcategory", "").strip()
     date = data.get("date", "").strip()
 
     if not description:
@@ -789,11 +810,14 @@ def api_update_expense(expense_id):
     if date and not date.strip():
         return jsonify({"error": "Invalid date"}), 400
 
+    cleaned_subcategory = _clean_subcategory(category, subcategory or None, description)
+
     db.update_expense(
         expense_id,
         description=description,
         amount=float(amount) if amount is not None else None,
         category=category if category else None,
+        subcategory=cleaned_subcategory,
         date=date if date else None,
     )
 
@@ -1079,7 +1103,12 @@ def api_category_breakdown():
     data = db.get_expenses_by_category_month(year, month, category, user_id=effective_user_id, page=page, per_page=per_page)
     for exp in data["expenses"]:
         exp["color"] = CATEGORY_COLORS.get(exp["category"], "#6b7280")
-    return jsonify(data)
+    response = dict(data)
+    if category == "Groceries":
+        response["subcategory_totals"] = db.get_subcategory_totals_by_month(
+            year, month, category, user_id=effective_user_id
+        )
+    return jsonify(response)
 
 
 # ── Export routes ────────────────────────────────────────────

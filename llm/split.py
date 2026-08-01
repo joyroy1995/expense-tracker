@@ -2,12 +2,14 @@ import json
 import re
 import sys
 from llm.config import _get_client, _has_api_key, FAST_MODEL, LLM_TIMEOUT
-from llm.categories import CATEGORIES, CATEGORIES_STR, extract_amount_fallback, keyword_category
+from llm.categories import CATEGORIES, CATEGORIES_STR, GROCERY_SUBCATEGORIES, GROCERY_SUBCATEGORIES_STR, extract_amount_fallback, keyword_category, grocery_subcategory
 from llm.expenses import check_learned
 
-SPLIT_PROMPT = f"""You are an expense splitter for a Bangladeshi user. Given a description containing multiple purchases, split it into individual items. Each item gets its own description, category, and amount.
+SPLIT_PROMPT = f"""You are an expense splitter for a Bangladeshi user. Given a description containing multiple purchases, split it into individual items. Each item gets its own description, category, subcategory, and amount.
 
 Categories: {CATEGORIES_STR}
+
+Grocery subcategories: {GROCERY_SUBCATEGORIES_STR} (only set "subcategory" for Groceries items, e.g. murgi -> Meat, rui mach -> Fish, dim -> Dairy & Eggs, chal -> Rice & Grains; otherwise omit or set null)
 
 Rules:
 - Split on separators: comma, "ar", "ও", "and", "+"
@@ -19,16 +21,16 @@ Rules:
 
 Examples:
 Input: gorur mangsho 500 ar mach 300, rickshaw 50
-Output: [{{"description":"gorur mangsho","category":"Groceries","amount":500}},
-         {{"description":"mach","category":"Groceries","amount":300}},
+Output: [{{"description":"gorur mangsho","category":"Groceries","subcategory":"Meat","amount":500}},
+         {{"description":"mach","category":"Groceries","subcategory":"Fish","amount":300}},
          {{"description":"rickshaw","category":"Transport","amount":50}}]
 
 Input: 1 kg gorur mangsho 600 tk ar 2 ta dim 30 taka
-Output: [{{"description":"1 kg gorur mangsho","category":"Groceries","amount":600}},
-         {{"description":"2 ta dim","category":"Groceries","amount":30}}]
+Output: [{{"description":"1 kg gorur mangsho","category":"Groceries","subcategory":"Meat","amount":600}},
+         {{"description":"2 ta dim","category":"Groceries","subcategory":"Dairy & Eggs","amount":30}}]
 
 Input: bazar korlam 1500
-Output: [{{"description":"bazar korlam","category":"Groceries","amount":1500}}]
+Output: [{{"description":"bazar korlam","category":"Groceries","subcategory":"General","amount":1500}}]
 
 Input: rickshaw 30 ar bus 20 ar lunch 150
 Output: [{{"description":"rickshaw","category":"Transport","amount":30}},
@@ -46,6 +48,15 @@ def _clean_split_desc(desc):
     return d
 
 
+def _set_subcategory(item):
+    cat = item.get("category", "Other")
+    if cat == "Groceries":
+        item["subcategory"] = grocery_subcategory(item.get("description", ""))
+    else:
+        item.pop("subcategory", None)
+    return item
+
+
 def _simple_split_expenses(description, learned_categories=None):
     parts = re.split(r'\s*(?:,|\bar\b|\band\b|\u0993|\+)\s*', description)
     parts = [p.strip() for p in parts if p.strip()]
@@ -58,7 +69,7 @@ def _simple_split_expenses(description, learned_categories=None):
         if not desc:
             continue
         cat = keyword_category(desc)
-        items.append({"description": desc, "category": cat, "amount": amount})
+        items.append({"description": desc, "category": cat, "subcategory": grocery_subcategory(desc) if cat == "Groceries" else None, "amount": amount})
     if not items:
         return None
     if learned_categories:
@@ -66,6 +77,8 @@ def _simple_split_expenses(description, learned_categories=None):
             learned_cat = check_learned(item.get("description", ""), learned_categories)
             if learned_cat:
                 item["category"] = learned_cat
+    for item in items:
+        _set_subcategory(item)
     return items
 
 
@@ -100,11 +113,19 @@ def split_expenses(description, learned_categories=None):
                             else:
                                 cat = "Other"
                         item["category"] = cat
+                        if cat == "Groceries":
+                            sub = item.get("subcategory")
+                            if sub not in GROCERY_SUBCATEGORIES:
+                                item["subcategory"] = grocery_subcategory(item.get("description", ""))
+                        else:
+                            item.pop("subcategory", None)
                     if learned_categories:
                         for item in items:
                             learned_cat = check_learned(item.get("description", ""), learned_categories)
                             if learned_cat:
                                 item["category"] = learned_cat
+                    for item in items:
+                        _set_subcategory(item)
                     return items
         except Exception as e:
             print(f"[ERROR] split_expenses LLM failed, falling back to simple split: {type(e).__name__}: {e}", file=sys.stderr)

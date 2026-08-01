@@ -41,6 +41,62 @@ CATEGORY_KEYWORDS = {
     "Savings": ["savings", "dps", "deposit", "sanchay", "bank", "account"],
 }
 
+GROCERY_SUBCATEGORIES = [
+    "Vegetables",
+    "Meat",
+    "Fish",
+    "Dairy & Eggs",
+    "Rice & Grains",
+    "Oils & Spices",
+    "Snacks & Drinks",
+    "General",
+]
+
+GROCERY_SUBCATEGORIES_STR = ", ".join(GROCERY_SUBCATEGORIES)
+
+SUBCATEGORY_KEYWORDS = {
+    "Vegetables": [
+        "shosha", "gajor", "borboti", "aloo", "alu", "begun", "fulkopi", "badhakopi",
+        "dherosh", "mula", "kumra", "lau", "korola", "potol", "jhinga", "chichinga",
+        "shim", "kochu", "shak", "palong shak", "uchha", "kakrol", "tomato", "salad",
+        "vegetable", "sabji", "sabzi", "sobji", "শাক", "সবজি", "শসা", "গাজর", "আলু",
+        "বেগুন", "ফুলকপি", "ধে", "ধেড়োশ", "মুলা", "কুমড়া", "লাউ", "করলা", "পটল",
+        "টমেটো", "কচু",
+    ],
+    "Meat": [
+        "murgi", "murghi", "chicken", "beef", "goru", "gosht", "goshti", "mutton",
+        "khashi", "hash", "hansh", "meat", "mangsho", "broiler", "cow", "গরুর মাংস",
+        "মুরগি", "খাসি", "হাঁস", "মাংস",
+    ],
+    "Fish": [
+        "fish", "mach", "rui", "katla", "tilapia", "pangash", "pangas", "koi",
+        "chingri", "shutki", "machher dim", "ilish", "hilsha", "pabda", "shing",
+        "magur", "tengra", "মাছ", "মাছের ডিম", "রুই", "কাতলা", "চিংড়ি", "শুঁটকি", "ইলিশ",
+    ],
+    "Dairy & Eggs": [
+        "dim", "egg", "dudh", "milk", "doi", "yogurt", "ghee", "paneer", "misti doi",
+        "ডিম", "দুধ", "দই", "ঘি",
+    ],
+    "Rice & Grains": [
+        "chal", "rice", "chira", "muri", "dal", "lentil", "ata", "aata", "maida",
+        "suji", "noodles", "ডাল", "চাল", "চিড়া", "মুড়ি", "আটা",
+    ],
+    "Oils & Spices": [
+        "tel", "oil", "moshla", "moshala", "spice", "holud", "dhonia", "jira", "jira",
+        "shorshe", "ada", "roshun", "peyaj", "peyaj", "onion", "garlic", "ginger",
+        "chili", "mirchi", "morich", "lobongo", "darchini", "তেল", "মসলা", "পেঁয়াজ",
+        "রসুন", "আদা", "হলুদ", "ধনিয়া", "জিরা", "সরিষা", "মরিচ",
+    ],
+    "Snacks & Drinks": [
+        "biscuit", "bisquit", "chocolate", "choklet", "chips", "chanachur", "chanar chur",
+        "cola", "coke", "pepsi", "7up", "lemonade", "juice", "cold drink", "cola",
+        "kola drink", "drink", "snack", "chotpoti", "badam", "almond", "kachari",
+        "বিস্কুট", "চানাচুর", "চকলেট", "জুস",
+    ],
+}
+
+_SUBCATEGORY_GENERAL = "General"
+
 _EXCLUDE_KEYWORDS = {"taka", "tk", "টাকা", "৳", "bdt"}
 
 
@@ -67,3 +123,12 @@ def keyword_category(description):
             if kw.lower() in text:
                 return category
     return "Other"
+
+
+def grocery_subcategory(description):
+    text = description.lower()
+    for subcat, keywords in SUBCATEGORY_KEYWORDS.items():
+        for kw in keywords:
+            if kw.lower() in text:
+                return subcat
+    return _SUBCATEGORY_GENERAL

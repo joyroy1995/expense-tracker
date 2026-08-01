@@ -4,13 +4,14 @@ import calendar
 from datetime import date, timedelta
 from config import SEED_CATEGORIES
 from llm.config import _get_client, _has_api_key, FAST_MODEL
-from llm.categories import CATEGORIES, CATEGORIES_STR, keyword_category, extract_amount_fallback, bengali_to_english_num, _EXCLUDE_KEYWORDS
+from llm.categories import CATEGORIES, CATEGORIES_STR, GROCERY_SUBCATEGORIES, GROCERY_SUBCATEGORIES_STR, keyword_category, grocery_subcategory, extract_amount_fallback, bengali_to_english_num, _EXCLUDE_KEYWORDS
 
 SYSTEM_PROMPT = f"""You are an expense extraction assistant for a Bangladeshi user. The user will describe their expense in English, Bengali, or Banglish (Bengali written in English letters).
 
 Your task:
 1. Identify the expense category from: {CATEGORIES_STR}
-2. Extract the amount in BDT from the text
+2. If the category is "Groceries", also identify the subcategory from: {GROCERY_SUBCATEGORIES_STR}
+3. Extract the amount in BDT from the text
 
 Amount patterns to recognize:
 - "30 taka", "50 tk", "100 taka"
@@ -19,8 +20,20 @@ Amount patterns to recognize:
 - Bengali numerals: ১=1, ২=2, ৩=3, ৪=4, ৫=5, ৬=6, ৭=7, ৮=8, ৯=9, ০=0
 - Just a number like "30" or "50" if context suggests it's an amount
 
+Grocery subcategory rules:
+- Vegetables: shosha, gajor, aloo, begun, fulkopi, shak, tomato, and other sabji/sabzi
+- Meat: murgi/murghi (chicken), gorur mangsho/beef, khashi/mutton, hash (duck)
+- Fish: rui, katla, tilapia, pangash, chingri, shutki, machher dim, any mach
+- Dairy & Eggs: dim (egg), dudh (milk), doi (yogurt), ghee
+- Rice & Grains: chal (rice), chira, muri, dal
+- Oils & Spices: tel (oil), moshla, peyaj (onion), ada (ginger), holud, dhonia, jira
+- Snacks & Drinks: biscuit, chanachur, badam, juice, cold drink
+- General: anything else grocery-related (e.g. "bazar korlam" without a specific item)
+
 Return ONLY a valid JSON object with this exact format:
-{{"category": "CategoryName", "amount": 30}}
+{{"category": "CategoryName", "subcategory": "SubcategoryName", "amount": 30}}
+
+For non-Groceries categories, set "subcategory" to null.
 
 Do not add any explanation or extra text. Return only the JSON.
 
@@ -33,47 +46,49 @@ Fruits is for any fruit purchases in any context. If a fruit name is found, alwa
 Dining Out is for meals eaten outside the home at restaurants, hotels, cafes, fast food joints, street food, or any food/drink purchased and consumed away from home. Any fruit juice belongs to Dining Out. Food is for general food items/snacks at home.
 
 Examples:
-- "shosha ar gajor kinlam 40 taka" -> {{"category": "Groceries", "amount": 40}}
-- "borboti ar aloo 30 tk" -> {{"category": "Groceries", "amount": 30}}
-- "murgi kinlam 220 taka" -> {{"category": "Groceries", "amount": 220}}
-- "gorur mangsho 600 tk" -> {{"category": "Groceries", "amount": 600}}
-- "rui mach 350 taka" -> {{"category": "Groceries", "amount": 350}}
-- "chingri kinlam 500 tk" -> {{"category": "Groceries", "amount": 500}}
-- "badam kinlam 30 taka" -> {{"category": "Groceries", "amount": 30}}
-- "bazar theke fulkopi ar begun anlam 120" -> {{"category": "Groceries", "amount": 120}}
-- "aam kinlam 200 taka" -> {{"category": "Fruits", "amount": 200}}
-- "kola ar peyara 80 tk" -> {{"category": "Fruits", "amount": 80}}
-- "bazar theke angur ar apple anlam 300" -> {{"category": "Fruits", "amount": 300}}
-- "lichu kinlam 150" -> {{"category": "Fruits", "amount": 150}}
-- "tarmuj kinechi 120" -> {{"category": "Fruits", "amount": 120}}
-- "swapno theke fol kinlam 500" -> {{"category": "Fruits", "amount": 500}}
-- "mango juice 80 tk" -> {{"category": "Dining Out", "amount": 80}}
-- "aamer juice khelam 60" -> {{"category": "Dining Out", "amount": 60}}
-- "restaurant e biryani khelam 350" -> {{"category": "Dining Out", "amount": 350}}
-- "kacchi khailam 450 taka" -> {{"category": "Dining Out", "amount": 450}}
-- "khacci biryani 400 tk" -> {{"category": "Dining Out", "amount": 400}}
-- "morog biryani 250" -> {{"category": "Dining Out", "amount": 250}}
-- "hotel e lunch 250" -> {{"category": "Dining Out", "amount": 250}}
-- "fuchka khelam 50 taka" -> {{"category": "Dining Out", "amount": 50}}
-- "pizza hut theke pizza 1200" -> {{"category": "Dining Out", "amount": 1200}}
-- "chinese fried rice 300" -> {{"category": "Dining Out", "amount": 300}}
-- "chowmein khelam 150" -> {{"category": "Dining Out", "amount": 150}}
-- "pad thai 200 tk" -> {{"category": "Dining Out", "amount": 200}}
-- "swapno theke bazar korlam 1500" -> {{"category": "Groceries", "amount": 1500}}
-- "shopno te kinlam 800" -> {{"category": "Groceries", "amount": 800}}
-- "mishti khelam 200 taka" -> {{"category": "Dining Out", "amount": 200}}
-- "roshmalai kinlam 150" -> {{"category": "Dining Out", "amount": 150}}
-- "ice cream khailam 100" -> {{"category": "Dining Out", "amount": 100}}
-- "jilapi diye cha 60" -> {{"category": "Dining Out", "amount": 60}}
-- "rickshaw te office gelam 50 tk" -> {{"category": "Transport", "amount": 50}}
-- "lunch at home 350" -> {{"category": "Food", "amount": 350}}
-- "চা খেয়েছি ২০ টাকা" -> {{"category": "Food", "amount": 20}}
-- "bus e bazar gelam 30" -> {{"category": "Transport", "amount": 30}}
-- "movie ticket 500 taka" -> {{"category": "Entertainment", "amount": 500}}
-- "pharmacy te oshudh 200 tk" -> {{"category": "Health", "amount": 200}}
-- "electricity bill dibo 1500" -> {{"category": "Bills", "amount": 1500}}
-- "daraz e jama kinlam 800 taka" -> {{"category": "Shopping", "amount": 800}}
-- "bari bhara 15000" -> {{"category": "Rent", "amount": 15000}}
+- "shosha ar gajor kinlam 40 taka" -> {{"category": "Groceries", "subcategory": "Vegetables", "amount": 40}}
+- "borboti ar aloo 30 tk" -> {{"category": "Groceries", "subcategory": "Vegetables", "amount": 30}}
+- "murgi kinlam 220 taka" -> {{"category": "Groceries", "subcategory": "Meat", "amount": 220}}
+- "gorur mangsho 600 tk" -> {{"category": "Groceries", "subcategory": "Meat", "amount": 600}}
+- "rui mach 350 taka" -> {{"category": "Groceries", "subcategory": "Fish", "amount": 350}}
+- "chingri kinlam 500 tk" -> {{"category": "Groceries", "subcategory": "Fish", "amount": 500}}
+- "badam kinlam 30 taka" -> {{"category": "Groceries", "subcategory": "Snacks & Drinks", "amount": 30}}
+- "bazar theke fulkopi ar begun anlam 120" -> {{"category": "Groceries", "subcategory": "Vegetables", "amount": 120}}
+- "dim ar dudh kinlam 100" -> {{"category": "Groceries", "subcategory": "Dairy & Eggs", "amount": 100}}
+- "5 kg chal 350" -> {{"category": "Groceries", "subcategory": "Rice & Grains", "amount": 350}}
+- "aam kinlam 200 taka" -> {{"category": "Fruits", "subcategory": null, "amount": 200}}
+- "kola ar peyara 80 tk" -> {{"category": "Fruits", "subcategory": null, "amount": 80}}
+- "bazar theke angur ar apple anlam 300" -> {{"category": "Fruits", "subcategory": null, "amount": 300}}
+- "lichu kinlam 150" -> {{"category": "Fruits", "subcategory": null, "amount": 150}}
+- "tarmuj kinechi 120" -> {{"category": "Fruits", "subcategory": null, "amount": 120}}
+- "swapno theke fol kinlam 500" -> {{"category": "Fruits", "subcategory": null, "amount": 500}}
+- "mango juice 80 tk" -> {{"category": "Dining Out", "subcategory": null, "amount": 80}}
+- "aamer juice khelam 60" -> {{"category": "Dining Out", "subcategory": null, "amount": 60}}
+- "restaurant e biryani khelam 350" -> {{"category": "Dining Out", "subcategory": null, "amount": 350}}
+- "kacchi khailam 450 taka" -> {{"category": "Dining Out", "subcategory": null, "amount": 450}}
+- "khacci biryani 400 tk" -> {{"category": "Dining Out", "subcategory": null, "amount": 400}}
+- "morog biryani 250" -> {{"category": "Dining Out", "subcategory": null, "amount": 250}}
+- "hotel e lunch 250" -> {{"category": "Dining Out", "subcategory": null, "amount": 250}}
+- "fuchka khelam 50 taka" -> {{"category": "Dining Out", "subcategory": null, "amount": 50}}
+- "pizza hut theke pizza 1200" -> {{"category": "Dining Out", "subcategory": null, "amount": 1200}}
+- "chinese fried rice 300" -> {{"category": "Dining Out", "subcategory": null, "amount": 300}}
+- "chowmein khelam 150" -> {{"category": "Dining Out", "subcategory": null, "amount": 150}}
+- "pad thai 200 tk" -> {{"category": "Dining Out", "subcategory": null, "amount": 200}}
+- "swapno theke bazar korlam 1500" -> {{"category": "Groceries", "subcategory": "General", "amount": 1500}}
+- "shopno te kinlam 800" -> {{"category": "Groceries", "subcategory": "General", "amount": 800}}
+- "mishti khelam 200 taka" -> {{"category": "Dining Out", "subcategory": null, "amount": 200}}
+- "roshmalai kinlam 150" -> {{"category": "Dining Out", "subcategory": null, "amount": 150}}
+- "ice cream khailam 100" -> {{"category": "Dining Out", "subcategory": null, "amount": 100}}
+- "jilapi diye cha 60" -> {{"category": "Dining Out", "subcategory": null, "amount": 60}}
+- "rickshaw te office gelam 50 tk" -> {{"category": "Transport", "subcategory": null, "amount": 50}}
+- "lunch at home 350" -> {{"category": "Food", "subcategory": null, "amount": 350}}
+- "চা খেয়েছি ২০ টাকা" -> {{"category": "Food", "subcategory": null, "amount": 20}}
+- "bus e bazar gelam 30" -> {{"category": "Transport", "subcategory": null, "amount": 30}}
+- "movie ticket 500 taka" -> {{"category": "Entertainment", "subcategory": null, "amount": 500}}
+- "pharmacy te oshudh 200 tk" -> {{"category": "Health", "subcategory": null, "amount": 200}}
+- "electricity bill dibo 1500" -> {{"category": "Bills", "subcategory": null, "amount": 1500}}
+- "daraz e jama kinlam 800 taka" -> {{"category": "Shopping", "subcategory": null, "amount": 800}}
+- "bari bhara 15000" -> {{"category": "Rent", "subcategory": null, "amount": 15000}}
 """
 
 
@@ -95,14 +110,32 @@ def check_learned(description, learned_dict=None):
     return None
 
 
+def _with_subcategory(category, subcategory, description):
+    if category == "Groceries":
+        if subcategory not in GROCERY_SUBCATEGORIES:
+            subcategory = grocery_subcategory(description)
+    else:
+        subcategory = None
+    return subcategory
+
+
 def extract_expense(description, learned_categories=None):
     learned_cat = check_learned(description, learned_categories)
     if learned_cat:
         amount = extract_amount_fallback(description) or 0
-        return {"category": learned_cat, "amount": amount}
+        return {
+            "category": learned_cat,
+            "subcategory": _with_subcategory(learned_cat, None, description),
+            "amount": amount,
+        }
 
     if not _has_api_key():
-        return {"category": keyword_category(description), "amount": extract_amount_fallback(description) or 0}
+        category = keyword_category(description)
+        return {
+            "category": category,
+            "subcategory": _with_subcategory(category, None, description),
+            "amount": extract_amount_fallback(description) or 0,
+        }
 
     try:
         client = _get_client()
@@ -113,7 +146,7 @@ def extract_expense(description, learned_categories=None):
                 {"role": "user", "content": description},
             ],
             temperature=0.1,
-            max_completion_tokens=100,
+            max_completion_tokens=120,
         )
         text = response.choices[0].message.content.strip().strip("```").strip()
 
@@ -124,6 +157,7 @@ def extract_expense(description, learned_categories=None):
 
         category = result.get("category", "Other")
         amount = float(result.get("amount", 0))
+        subcategory = result.get("subcategory") or None
 
         if category not in CATEGORIES:
             for cat in CATEGORIES:
@@ -133,16 +167,22 @@ def extract_expense(description, learned_categories=None):
             else:
                 category = "Other"
 
+        subcategory = _with_subcategory(category, subcategory, description)
+
         if amount <= 0:
             fallback = extract_amount_fallback(description)
             if fallback:
                 amount = fallback
 
-        return {"category": category, "amount": amount}
+        return {"category": category, "subcategory": subcategory, "amount": amount}
     except Exception:
         amount = extract_amount_fallback(description)
         category = keyword_category(description)
-        return {"category": category, "amount": amount or 0}
+        return {
+            "category": category,
+            "subcategory": _with_subcategory(category, None, description),
+            "amount": amount or 0,
+        }
 
 
 def predict_expense(description, learned_categories=None):
@@ -151,7 +191,11 @@ def predict_expense(description, learned_categories=None):
     learned_cat = check_learned(description, learned_categories)
     if learned_cat:
         amount = extract_amount_fallback(description) or 0
-        return {"category": learned_cat, "amount": amount}
+        return {
+            "category": learned_cat,
+            "subcategory": _with_subcategory(learned_cat, None, description),
+            "amount": amount,
+        }
     return extract_expense(description, learned_categories)
 
 

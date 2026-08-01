@@ -6,7 +6,7 @@ import time
 import urllib.error
 import urllib.request
 import sys
-from llm.categories import keyword_category, extract_amount_fallback
+from llm.categories import keyword_category, grocery_subcategory, extract_amount_fallback
 
 RECEIPT_SCAN_PROMPT = """You are a receipt parser for a Bangladeshi expense tracker.
 Given a receipt image, extract all line items.
@@ -14,12 +14,13 @@ Given a receipt image, extract all line items.
 For each item, return:
 - description: the item name together with its quantity/units, e.g. "1 kg rice", "2 ta egg", "500 gm sugar"
 - amount: ONLY the taka price for that line (number only, no currency symbol, no quantity like "2 x", "1 kg")
+- subcategory: for grocery items only, one of Vegetables, Meat, Fish, Dairy & Eggs, Rice & Grains, Oils & Spices, Snacks & Drinks, General (e.g. murgi -> Meat, rui mach -> Fish, dim -> Dairy & Eggs, chal -> Rice & Grains, tel -> Oils & Spices). For non-grocery items set it to null.
 
 If a store/merchant name or date is visible on the receipt, include them.
 If the receipt text is in Bengali or Banglish, extract and return in that form.
 
 Return ONLY a valid JSON object with this exact structure:
-{"store": "store name or null", "date": "YYYY-MM-DD or null", "items": [{"description": "...", "amount": 123.45}]}
+{"store": "store name or null", "date": "YYYY-MM-DD or null", "items": [{"description": "...", "amount": 123.45, "subcategory": "..."}]}
 
 Do not add any explanation or extra text."""
 
@@ -165,7 +166,12 @@ def scan_receipt(image_bytes):
     def _categorize_items(items):
         for item in items:
             desc = item.get("description", "")
-            item["category"] = keyword_category(desc)
+            category = keyword_category(desc)
+            item["category"] = category
+            if category == "Groceries":
+                item["subcategory"] = grocery_subcategory(desc)
+            else:
+                item.pop("subcategory", None)
             amount = _normalize_amount(item.get("amount")) or extract_amount_fallback(desc) or 0
             item["amount"] = round(amount, 2)
 

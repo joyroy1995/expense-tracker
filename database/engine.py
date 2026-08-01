@@ -562,6 +562,59 @@ def _run_migrations():
             )
             conn.commit()
 
+    with engine.connect() as conn:
+        result = conn.execute(
+            text("SELECT COUNT(*) FROM migrations WHERE name = 'expense_subcategory'")
+        )
+        if result.fetchone()[0] == 0:
+            if _is_postgres():
+                col_check = conn.execute(
+                    text("SELECT column_name FROM information_schema.columns WHERE table_name = 'expenses' AND column_name = 'subcategory'")
+                )
+                if not col_check.fetchone():
+                    conn.execute(
+                        text("ALTER TABLE expenses ADD COLUMN subcategory TEXT")
+                    )
+            else:
+                result2 = conn.execute(text("PRAGMA table_info(expenses)"))
+                cols = [r[1] for r in result2]
+                if "subcategory" not in cols:
+                    conn.execute(
+                        text("ALTER TABLE expenses ADD COLUMN subcategory TEXT")
+                    )
+            now = datetime.now(TIMEZONE).strftime("%Y-%m-%d %H:%M:%S")
+            conn.execute(
+                text("INSERT INTO migrations (name, applied_at) VALUES ('expense_subcategory', :n)"),
+                {"n": now},
+            )
+            conn.commit()
+
+    with engine.connect() as conn:
+        result = conn.execute(
+            text("SELECT COUNT(*) FROM migrations WHERE name = 'expense_subcategory_backfill'")
+        )
+        if result.fetchone()[0] == 0:
+            from llm.categories import grocery_subcategory
+            rows = conn.execute(
+                text("SELECT id, description FROM expenses WHERE category = 'Groceries' AND subcategory IS NULL")
+            ).fetchall()
+            counts = {}
+            for row in rows:
+                sub = grocery_subcategory(row[1])
+                counts[sub] = counts.get(sub, 0) + 1
+                conn.execute(
+                    text("UPDATE expenses SET subcategory = :s WHERE id = :id"),
+                    {"s": sub, "id": row[0]},
+                )
+            if counts:
+                print(f"[MIGRATION] expense_subcategory_backfill: {dict(counts)}", file=sys.stderr)
+            now = datetime.now(TIMEZONE).strftime("%Y-%m-%d %H:%M:%S")
+            conn.execute(
+                text("INSERT INTO migrations (name, applied_at) VALUES ('expense_subcategory_backfill', :n)"),
+                {"n": now},
+            )
+            conn.commit()
+
 
 def get_data_version():
     engine = get_engine()

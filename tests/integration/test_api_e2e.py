@@ -3,6 +3,7 @@
 import json
 from unittest.mock import ANY, patch, MagicMock
 from datetime import datetime
+import database as db
 from config import TIMEZONE
 
 
@@ -349,6 +350,79 @@ class TestExpenseCRUDAPI:
             assert data["amount"] == 200
             assert data["category"] == "Food"
 
+    def test_add_expense_grocery_subcategory(self, auth_client):
+        resp = auth_client.post("/api/add_expense", json={
+            "date": "2025-01-15",
+            "description": "murgi kinlam 220",
+            "amount": 220,
+            "category": "Groceries",
+            "subcategory": "Meat",
+        })
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["category"] == "Groceries"
+        assert data["subcategory"] == "Meat"
+        saved = db.get_expense_by_id(data["id"])
+        assert saved["subcategory"] == "Meat"
+
+    def test_add_expense_grocery_subcategory_invalid_falls_back(self, auth_client):
+        resp = auth_client.post("/api/add_expense", json={
+            "description": "aloo ar begun 120",
+            "amount": 120,
+            "category": "Groceries",
+            "subcategory": "NotARealSubcat",
+        })
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["category"] == "Groceries"
+        assert data["subcategory"] in ("Vegetables", "General")
+
+    def test_add_expense_non_grocery_subcategory_cleared(self, auth_client):
+        resp = auth_client.post("/api/add_expense", json={
+            "description": "lunch",
+            "amount": 150,
+            "category": "Food",
+            "subcategory": "Meat",
+        })
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["category"] == "Food"
+        assert data["subcategory"] is None
+
+    def test_add_expense_auto_extract_grocery_subcategory(self, auth_client):
+        with patch("app.extract_expense") as mock_extract:
+            mock_extract.return_value = {"category": "Groceries", "subcategory": "Meat", "amount": 220}
+            resp = auth_client.post("/api/add_expense", json={"description": "murgi 220 taka"})
+            assert resp.status_code == 200
+            data = resp.get_json()
+            assert data["category"] == "Groceries"
+            assert data["subcategory"] == "Meat"
+
+    def test_update_expense_subcategory(self, auth_client):
+        add = auth_client.post("/api/add_expense", json={
+            "description": "mach 300",
+            "amount": 300,
+            "category": "Groceries",
+            "subcategory": "General",
+        })
+        exp_id = add.get_json()["id"]
+        resp = auth_client.put(f"/api/expenses/{exp_id}", json={
+            "description": "mach 300",
+            "amount": 300,
+            "category": "Groceries",
+            "subcategory": "Fish",
+        })
+        assert resp.status_code == 200
+        assert resp.get_json()["subcategory"] == "Fish"
+        resp2 = auth_client.put(f"/api/expenses/{exp_id}", json={
+            "description": "mach 300",
+            "amount": 300,
+            "category": "Transport",
+            "subcategory": "Fish",
+        })
+        assert resp2.status_code == 200
+        assert resp2.get_json()["subcategory"] is None
+
     def test_delete_expense(self, auth_client, seed_expenses):
         # First add a known expense
         resp = auth_client.post("/api/add_expense", json={
@@ -399,6 +473,27 @@ class TestExpenseCRUDAPI:
         data = resp.get_json()
         assert "expenses" in data
         assert "total" in data
+
+    def test_category_breakdown_groceries_subcategory_totals(self, auth_client):
+        now = datetime.now(TIMEZONE)
+        resp = auth_client.post("/api/expenses/bulk", json={
+            "date": now.strftime("%Y-%m-%d"),
+            "items": [
+                {"description": "murgi", "amount": 220, "category": "Groceries", "subcategory": "Meat"},
+                {"description": "mach", "amount": 300, "category": "Groceries", "subcategory": "Fish"},
+                {"description": "murgi shobar jonna", "amount": 100, "category": "Groceries", "subcategory": "Meat"},
+            ],
+        })
+        assert resp.get_json()["count"] == 3
+        breakdown = auth_client.get(
+            f"/api/expenses/category-breakdown?year={now.year}&month={now.month}&category=Groceries"
+        )
+        assert breakdown.status_code == 200
+        data = breakdown.get_json()
+        assert "subcategory_totals" in data
+        totals = {t["subcategory"]: t["total"] for t in data["subcategory_totals"]}
+        assert totals.get("Meat") == 320
+        assert totals.get("Fish") == 300
 
     def test_daily_totals(self, auth_client, seed_expenses):
         now = datetime.now(TIMEZONE)
@@ -469,6 +564,19 @@ class TestBulkExpenseAPI:
         assert data["count"] == 2
         assert len(data["expenses"]) == 2
 
+    def test_bulk_grocery_subcategory(self, auth_client):
+        resp = auth_client.post("/api/expenses/bulk", json={
+            "date": "2025-01-15",
+            "items": [
+                {"description": "murgi 220", "amount": 220, "category": "Groceries", "subcategory": "Meat"},
+                {"description": "aloo", "amount": 40, "category": "Groceries", "subcategory": "Vegetables"},
+            ],
+        })
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["count"] == 2
+        assert {e["subcategory"] for e in data["expenses"]} == {"Meat", "Vegetables"}
+
     def test_bulk_skips_invalid_items(self, auth_client):
         resp = auth_client.post("/api/expenses/bulk", json={
             "items": [
@@ -497,7 +605,16 @@ class TestPredictExpenseAPI:
         assert resp.status_code == 200
         data = resp.get_json()
         assert data["category"] == "Food"
-        assert data["amount"] == 200
+
+    @patch("app.predict_expense")
+    def test_predict_grocery_subcategory(self, mock_predict, auth_client):
+        mock_predict.return_value = {"category": "Groceries", "subcategory": "Meat", "amount": 220}
+        resp = auth_client.post("/api/predict_expense", json={"description": "murgi 220"})
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["category"] == "Groceries"
+        assert data["subcategory"] == "Meat"
+        assert data["amount"] == 220
 
     def test_predict_short_description(self, auth_client):
         resp = auth_client.post("/api/predict_expense", json={"description": "x"})
