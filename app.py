@@ -250,13 +250,14 @@ def api_index():
         exp["color"] = CATEGORY_COLORS.get(exp["category"], "#6b7280")
     budget_status = db.get_budget_status(uid)
     budget_alerts = [b for b in budget_status if b["percentage"] >= 80]
+    user_subcategories = db.get_user_subcategories(uid)
     return jsonify({
         "today": today,
         "today_total": today_total,
         "month_total": month_total,
         "today_expenses": today_expenses,
         "category_colors": CATEGORY_COLORS,
-        "grocery_subcategories": GROCERY_SUBCATEGORIES,
+        "grocery_subcategories": GROCERY_SUBCATEGORIES + user_subcategories,
         "budget_alerts": budget_alerts,
     })
 
@@ -299,6 +300,8 @@ def api_dashboard():
     for exp in paginated["expenses"]:
         exp["color"] = CATEGORY_COLORS.get(exp["category"], "#6b7280")
 
+    uid = session["user_id"]
+    user_subcategories = db.get_user_subcategories(uid)
     return jsonify({
         "category_totals": category_totals,
         "monthly_totals": monthly_totals,
@@ -315,7 +318,7 @@ def api_dashboard():
         "filter_user_id": filter_user_id,
         "users_list": users_list,
         "category_colors": CATEGORY_COLORS,
-        "grocery_subcategories": GROCERY_SUBCATEGORIES,
+        "grocery_subcategories": GROCERY_SUBCATEGORIES + user_subcategories,
         "role": session.get("role"),
     })
 

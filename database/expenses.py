@@ -323,6 +323,20 @@ def get_distinct_categories():
     return [row[0] for row in result]
 
 
+def get_user_subcategories(user_id):
+    """Get distinct subcategories used by a user for Groceries expenses."""
+    conn = get_connection()
+    result = conn.execute(
+        text("""
+            SELECT DISTINCT subcategory FROM expenses
+            WHERE user_id = :uid AND category = 'Groceries' AND subcategory IS NOT NULL
+            ORDER BY subcategory
+        """),
+        {"uid": user_id},
+    )
+    return [row[0] for row in result]
+
+
 def get_distinct_years(user_id=None):
     conn = get_connection()
     uf = _user_filter(user_id)
