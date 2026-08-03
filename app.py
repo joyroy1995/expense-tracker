@@ -804,7 +804,7 @@ def api_update_expense(expense_id):
     description = data.get("description", "").strip()
     amount = data.get("amount")
     category = data.get("category", "").strip()
-    subcategory = data.get("subcategory", "").strip()
+    subcategory = (data.get("subcategory") or "").strip()
     date = data.get("date", "").strip()
 
     if not description:
