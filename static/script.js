@@ -250,11 +250,10 @@ function ensureSubcategoryDatalist() {
     dl.id = 'grocerySubcatList';
     document.body.appendChild(dl);
   }
-  if (!dl.options.length) {
-    dl.innerHTML = (window.grocerySubcategories || []).map(s =>
-      `<option value="${s}"></option>`
-    ).join('');
-  }
+  // Always update to reflect current window.grocerySubcategories (includes user's custom subcategories)
+  dl.innerHTML = (window.grocerySubcategories || []).map(s =>
+    `<option value="${s}"></option>`
+  ).join('');
   return dl;
 }
 
