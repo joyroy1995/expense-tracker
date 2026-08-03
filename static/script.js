@@ -254,24 +254,63 @@ function ensureSubcategoryDatalist() {
   dl.innerHTML = (window.grocerySubcategories || []).map(s =>
     `<option value="${s}"></option>`
   ).join('');
+  console.debug('[ensureSubcategoryDatalist] grocerySubcategories:', window.grocerySubcategories, 'datalist options:', dl.options.length);
   return dl;
 }
 
-function subcategoryInputHtml(selected, className, id) {
+function buildSubcategoryOptionsHtml(selected) {
+  const options = (window.grocerySubcategories || []).map(s =>
+    `<option value="${esc(s)}" ${s === selected ? 'selected' : ''}>${esc(s)}</option>`
+  ).join('');
+  // Add "Other..." option for custom entry
+  return options + `<option value="__CUSTOM__" ${!selected || !window.grocerySubcategories?.includes(selected) ? 'selected' : ''}>Other…</option>`;
+}
+
+function subcategoryInputHtml(selected, className, id, onInput) {
   ensureSubcategoryDatalist();
   const idAttr = id ? `id="${id}"` : '';
   const value = selected || 'General';
-  return `<input type="text" ${idAttr} class="${className}" list="grocerySubcatList" value="${esc(value)}" placeholder="Type or pick a subcategory">`;
+  const onInputAttr = onInput ? `oninput="${onInput}"` : '';
+  // Use a select + hidden input pattern for cross-platform (iOS Safari doesn't support datalist)
+  return `
+    <div class="subcategory-combo" ${idAttr}>
+      <select class="${className}-select" ${onInputAttr} onchange="handleSubcategoryChange(this)">
+        ${buildSubcategoryOptionsHtml(value)}
+      </select>
+      <input type="text" class="${className}-custom" placeholder="Type custom subcategory" style="display:none" ${onInputAttr}>
+      <input type="hidden" class="${className}-value" name="subcategory" value="${esc(value)}">
+    </div>
+  `;
 }
 
-function subBadge(sub) {
-  return sub ? `<span class="subcategory-badge">${esc(sub)}</span>` : '';
+function handleSubcategoryChange(select) {
+  const combo = select.closest('.subcategory-combo');
+  const customInput = combo.querySelector('.subcategory-custom');
+  const hiddenInput = combo.querySelector('.subcategory-value');
+  if (select.value === '__CUSTOM__') {
+    customInput.style.display = 'block';
+    customInput.focus();
+    // Keep the hidden value as the last selected or custom
+  } else {
+    customInput.style.display = 'none';
+    customInput.value = '';
+    hiddenInput.value = select.value;
+    // Trigger input event on hidden to propagate change
+    hiddenInput.dispatchEvent(new Event('input', { bubbles: true }));
+  }
+}
+
+function handleSubcategoryCustomInput(input) {
+  const combo = input.closest('.subcategory-combo');
+  const hiddenInput = combo.querySelector('.subcategory-value');
+  hiddenInput.value = input.value;
+  hiddenInput.dispatchEvent(new Event('input', { bubbles: true }));
 }
 
 function subcategorySelectHtml(selected) {
   return `
     <label class="preview-field-label">Subcategory</label>
-    ${subcategoryInputHtml(selected, 'preview-subcategory-select')}`;
+    ${subcategoryInputHtml(selected, 'preview-subcategory-select', '', 'handleSubcategoryCustomInput(this)')}`;
 }
 
 function makeExpenseItem(exp) {
@@ -938,14 +977,15 @@ function attachExpenseForm(today) {
     });
     preview.querySelector('.preview-category-select')?.addEventListener('change', (e) => {
       const isGroceries = e.target.value === 'Groceries';
-      const existing = preview.querySelector('.preview-subcategory-select');
+      const existing = preview.querySelector('.preview-subcategory-select-combo');
       const catField = e.target.closest('.preview-field');
       if (isGroceries && !existing) {
         const subField = document.createElement('div');
         subField.className = 'preview-field';
         subField.innerHTML = subcategorySelectHtml(data.subcategory);
         catField.insertAdjacentElement('afterend', subField);
-        subField.querySelector('.preview-subcategory-select').addEventListener('change', () => { userModifiedPreview = true; });
+        subField.querySelector('.preview-subcategory-select-combo').addEventListener('change', () => { userModifiedPreview = true; });
+        subField.querySelector('.preview-subcategory-select-combo').addEventListener('input', () => { userModifiedPreview = true; });
       } else if (!isGroceries && existing) {
         existing.closest('.preview-field').remove();
       }
@@ -963,10 +1003,10 @@ function attachExpenseForm(today) {
   function getPreviewValues() {
     const s = preview.querySelector('.preview-category-select');
     const a = preview.querySelector('.preview-amount-input');
-    const sub = preview.querySelector('.preview-subcategory-select');
+    const subCombo = preview.querySelector('.preview-subcategory-select-combo .subcategory-value');
     return s && a ? {
       category: s.value,
-      subcategory: s.value === 'Groceries' && sub ? sub.value : null,
+      subcategory: s.value === 'Groceries' && subCombo ? subCombo.value : null,
       amount: parseFloat(a.value) || 0,
     } : null;
   }
@@ -2772,10 +2812,7 @@ function renderChatMessages() {
             oninput="updateChatItemAmount(${idx}, ${itemIdx}, this.value)">
           ${i.category === 'Groceries' ? `
           <div class="chat-expense-subcategory-wrap">
-            <label class="chat-expense-subcategory-label">Subcategory</label>
-            <input type="text" class="chat-expense-subcategory" list="grocerySubcatList"
-              value="${esc(i.subcategory || 'General')}" placeholder="Type or pick a subcategory"
-              oninput="updateChatItemSubcategory(${idx}, ${itemIdx}, this.value)">
+            ${subcategoryInputHtml(i.subcategory || 'General', 'chat-expense-subcategory', '', `handleSubcategoryCustomInput(this)`).replace('oninput="handleSubcategoryCustomInput(this)"', `oninput="updateChatItemSubcategory(${idx}, ${itemIdx}, this.closest('.subcategory-combo').querySelector('.subcategory-value').value)"`)}
           </div>` : ''}
         </div>`;
       });

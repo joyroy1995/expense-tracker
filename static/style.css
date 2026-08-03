@@ -2783,6 +2783,69 @@ select option {
   border-color: var(--primary);
   box-shadow: 0 0 0 2px var(--primary-light);
 }
+
+/* Subcategory combo (select + custom input) */
+.subcategory-combo {
+  display: flex;
+  gap: 4px;
+  width: 100%;
+  max-width: 220px;
+}
+.subcategory-combo select {
+  flex: 1;
+  min-width: 0;
+  padding: 3px 6px;
+  font-size: 12px;
+  font-family: inherit;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  outline: none;
+}
+.subcategory-combo select:focus {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 2px var(--primary-light);
+}
+.subcategory-combo .subcategory-custom {
+  flex: 1;
+  min-width: 0;
+  padding: 3px 6px;
+  font-size: 12px;
+  font-family: inherit;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  outline: none;
+}
+.subcategory-combo .subcategory-custom:focus {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 2px var(--primary-light);
+}
+.preview-subcategory-select-combo {
+  display: flex;
+  gap: 4px;
+  width: 100%;
+}
+.preview-subcategory-select-combo select {
+  flex: 1;
+  padding: 4px 8px;
+  font-size: 13px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--text);
+}
+.preview-subcategory-select-combo .preview-subcategory-custom {
+  flex: 1;
+  padding: 4px 8px;
+  font-size: 13px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--text);
+}
 .chat-expense-item .category-badge {
   flex-shrink: 0;
 }
