@@ -313,6 +313,10 @@ function subcategorySelectHtml(selected) {
     ${subcategoryInputHtml(selected, 'preview-subcategory-select', '', 'handleSubcategoryCustomInput(this)')}`;
 }
 
+function subBadge(sub) {
+  return sub ? `<span class="subcategory-badge">${esc(sub)}</span>` : '';
+}
+
 function makeExpenseItem(exp) {
   return `
     <div class="expense-item" data-id="${exp.id}">
