@@ -1093,6 +1093,21 @@ class TestChatAPI:
             assert data["type"] == "expense"
             assert "items" in data
 
+    def test_chat_expense_predict_includes_subcategory(self, auth_client):
+        with patch("app.is_question") as mock_is_q, \
+             patch("app.split_expenses") as mock_split, \
+             patch("app.predict_expense") as mock_predict:
+            mock_is_q.return_value = False
+            mock_split.return_value = None
+            mock_predict.return_value = {"category": "Groceries", "subcategory": "Meat", "amount": 220}
+            resp = auth_client.post("/api/chat", json={
+                "message": "murgi 220 taka",
+            })
+            assert resp.status_code == 200
+            data = resp.get_json()
+            assert data["type"] == "expense"
+            assert data["items"][0]["subcategory"] == "Meat"
+
     def test_chat_budget_intent_detected(self, auth_client):
         with patch("app.detect_budget_intent") as mock_budget:
             mock_budget.return_value = {"category": "Food", "amount": 5000}

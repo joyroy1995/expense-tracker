@@ -2,7 +2,6 @@ import json
 import base64
 import os
 import re
-import time
 import urllib.error
 import urllib.request
 import sys
@@ -109,59 +108,6 @@ def _scan_receipt_gemini_flash(image_bytes):
     return None, error_msg
 
 
-def _scan_receipt_groq(image_bytes):
-    try:
-        from llm.config import _get_client
-    except Exception:
-        return None, "GROQ_API_KEY not configured"
-    client = _get_client()
-    if not client:
-        return None, "GROQ_API_KEY not configured"
-    b64 = base64.b64encode(image_bytes).decode()
-    models = ["qwen/qwen3.6-27b"]
-    last_error = ""
-    for model in models:
-        for attempt in range(2):
-            try:
-                response = client.chat.completions.create(
-                    model=model,
-                    messages=[{
-                        "role": "user",
-                        "content": [
-                            {"type": "text", "text": RECEIPT_SCAN_PROMPT},
-                            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
-                        ],
-                    }],
-                    temperature=0.1,
-                    max_completion_tokens=4096,
-                    timeout=60,
-                )
-                raw = response.choices[0].message.content
-                if not raw:
-                    last_error = f"Groq vision ({model}): empty response"
-                    print(f"[WARN] {last_error} (attempt {attempt+1})", file=sys.stderr)
-                    time.sleep(1)
-                    continue
-                text = raw.strip()
-                if "<?xml" in text or "<think>" in text:
-                    text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
-                text = text.strip("```").strip()
-                if text.lower().startswith("json"):
-                    text = text[4:].strip()
-                parsed = json.loads(text)
-                return parsed, None
-            except json.JSONDecodeError as e:
-                last_error = f"Groq vision ({model}): invalid JSON response - {e}"
-                print(f"[ERROR] _scan_receipt_groq JSON decode error: {last_error}", file=sys.stderr)
-            except Exception as e:
-                last_error = f"Groq vision ({model}): {type(e).__name__} - {e}"
-                print(f"[ERROR] _scan_receipt_groq failed: {last_error} (attempt {attempt+1})", file=sys.stderr)
-                time.sleep(1)
-                continue
-            break
-    return None, last_error
-
-
 def scan_receipt(image_bytes):
     def _categorize_items(items):
         for item in items:
@@ -181,12 +127,6 @@ def scan_receipt(image_bytes):
             _categorize_items(result["items"])
             return result
         return {"error": "Receipt detected but no line items found. Try a clearer photo."}
-    result, groq_error = _scan_receipt_groq(image_bytes)
-    if result is not None:
-        if result.get("items"):
-            _categorize_items(result["items"])
-            return result
-        return {"error": "Receipt detected but no line items found. Try a clearer photo."}
-    print(f"[ERROR] scan_receipt failed: Gemini={gemini_error} | Groq={groq_error}", file=sys.stderr)
-    error_msg = gemini_error if gemini_error else groq_error or "No vision API available. Set GEMINI_API_KEY or GROQ_API_KEY."
+    print(f"[ERROR] scan_receipt failed: {gemini_error}", file=sys.stderr)
+    error_msg = gemini_error or "No vision API available. Set GEMINI_API_KEY."
     return {"error": error_msg}

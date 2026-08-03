@@ -578,6 +578,7 @@ def api_chat():
                 "items": [{
                     "description": clean_date_refs(_clean_split_desc(cleaned_message) or cleaned_message),
                     "category": cat,
+                    "subcategory": prediction.get("subcategory"),
                     "amount": prediction["amount"],
                     "color": CATEGORY_COLORS.get(cat, "#6b7280"),
                 }]

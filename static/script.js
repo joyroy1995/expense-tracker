@@ -2753,6 +2753,7 @@ function renderChatMessages() {
       const items = msg.items || [];
       let total = items.reduce((s, i) => s + (i.amount || 0), 0);
       let h = `<div class="chat-message ai-message"><div class="chat-bubble ai-bubble">`;
+      ensureSubcategoryDatalist();
       const dateVal = msg.date || new Date().toISOString().slice(0, 10);
       h += `<div class="chat-expense-header">I found these expenses <input type="date" class="chat-expense-date" value="${dateVal}" onchange="updateChatExpenseDate(${idx}, this.value)">:</div>`;
       h += `<div class="chat-expense-list">`;
@@ -2770,6 +2771,13 @@ function renderChatMessages() {
             oninput="this.style.height='auto';this.style.height=Math.min(this.scrollHeight,120)+'px';updateChatItemDesc(${idx}, ${itemIdx}, this.value)">${esc(i.description || '')}</textarea>
           <span class="chat-expense-amt-prefix">৳</span><input class="chat-expense-amt" type="number" step="0.01" min="0" value="${(i.amount || 0).toFixed(2)}"
             oninput="updateChatItemAmount(${idx}, ${itemIdx}, this.value)">
+          ${i.category === 'Groceries' ? `
+          <div class="chat-expense-subcategory-wrap">
+            <label class="chat-expense-subcategory-label">Subcategory</label>
+            <input type="text" class="chat-expense-subcategory" list="grocerySubcatList"
+              value="${esc(i.subcategory || 'General')}" placeholder="Type or pick a subcategory"
+              oninput="updateChatItemSubcategory(${idx}, ${itemIdx}, this.value)">
+          </div>` : ''}
         </div>`;
       });
       h += `</div>`;
@@ -2995,8 +3003,21 @@ async function sendChatMessage() {
 function updateChatItemCategory(msgIdx, itemIdx, newCategory) {
   const msg = chatMessages[msgIdx];
   if (!msg || msg.type !== 'expense_preview' || !msg.items[itemIdx]) return;
-  msg.items[itemIdx].category = newCategory;
-  msg.items[itemIdx].color = (window.categoryColors || {})[newCategory] || '#6b7280';
+  const item = msg.items[itemIdx];
+  item.category = newCategory;
+  item.color = (window.categoryColors || {})[newCategory] || '#6b7280';
+  if (newCategory === 'Groceries') {
+    if (!item.subcategory) item.subcategory = 'General';
+  } else {
+    item.subcategory = null;
+  }
+  renderChatMessages();
+}
+
+function updateChatItemSubcategory(msgIdx, itemIdx, value) {
+  const msg = chatMessages[msgIdx];
+  if (!msg || msg.type !== 'expense_preview' || !msg.items[itemIdx]) return;
+  msg.items[itemIdx].subcategory = value;
 }
 
 function updateChatItemDesc(msgIdx, itemIdx, value) {
