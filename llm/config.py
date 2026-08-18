@@ -27,7 +27,7 @@ def _read_env(key):
 # ── Model selection ──
 # Complex model for SQL generation, verification, decomposition, forecasting.
 # Fast model for expense extraction and splitting.
-COMPLEX_MODEL = os.environ.get("LLM_COMPLEX_MODEL", "llama-3.3-70b-versatile")
+COMPLEX_MODEL = os.environ.get("LLM_COMPLEX_MODEL", "openai/gpt-oss-20b")
 FAST_MODEL = os.environ.get("LLM_FAST_MODEL", "llama-3.1-8b-instant")
 
 # Request timeout in seconds
